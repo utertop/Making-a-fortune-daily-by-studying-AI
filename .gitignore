@@ -14,11 +14,34 @@ out/
 # Local data
 /data/*.db
 /data/*.db-*
+/data/*.log
+*.log
 
 # Local secrets
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
 
-# Logs
-*.log
+# Token / credential dumps
+*token*
+*secret*
+*credential*
+*credentials*
+*apikey*
+*api_key*
+
+# Allow documentation that mentions these words safely
+!docs/*
+!README.md
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

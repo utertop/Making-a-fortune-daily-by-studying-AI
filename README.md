@@ -6,9 +6,11 @@ Current phase: v0.1 skeleton.
 
 ## Documents
 
-- `AI_SIGNAL_RADAR_PLAN.md`: product and architecture plan
-- `V0_1_TASKS.md`: v0.1 task checklist
+- `docs/AI_SIGNAL_RADAR_PLAN.md`: product and architecture plan
+- `docs/V0_1_TASKS.md`: v0.1 task checklist
 - `docs/LOCAL_DEV.md`: local development notes
+- `docs/FEISHU_WEBHOOK.md`: Feishu webhook setup
+- `docs/SECURITY_RULES.md`: secret and local file safety rules
 
 ## v0.1 Focus
 
@@ -17,3 +19,7 @@ Current phase: v0.1 skeleton.
 - Feishu task push
 - Today Workspace
 - Markdown knowledge-base submission
+
+
+
+

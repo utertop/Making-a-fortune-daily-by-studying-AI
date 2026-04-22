@@ -35,6 +35,8 @@ http://127.0.0.1:3000
 
 ## Feishu Push
 
+Detailed setup guide: `docs/FEISHU_WEBHOOK.md`.
+
 Create a local `.env` from `.env.example`, then set:
 
 ```text
@@ -54,3 +56,11 @@ Send to Feishu:
 ```
 
 The script does not send anything unless `--send` is provided.
+
+
+
+## Security Rules
+
+Before committing, read docs/SECURITY_RULES.md. Do not commit .env, tokens, webhook URLs, local databases, caches, logs, .venv/, or 
+ode_modules/.
+
