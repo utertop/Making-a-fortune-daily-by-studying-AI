@@ -32,3 +32,25 @@ Open:
 ```text
 http://127.0.0.1:3000
 ```
+
+## Feishu Push
+
+Create a local `.env` from `.env.example`, then set:
+
+```text
+FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxx
+```
+
+Preview today's task message without sending:
+
+```powershell
+.venv\Scripts\python scripts\push_today.py --limit 5
+```
+
+Send to Feishu:
+
+```powershell
+.venv\Scripts\python scripts\push_today.py --send --limit 10
+```
+
+The script does not send anything unless `--send` is provided.
