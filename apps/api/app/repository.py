@@ -231,7 +231,66 @@ def list_recent_github_repos(limit: int = 10) -> list[dict[str, Any]]:
         ).fetchall()
         return [dict(row) for row in rows]
 
+def list_github_repo_scoring_inputs() -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            with first_snapshot as (
+                select s.*
+                from github_repo_snapshot s
+                where s.id = (
+                    select min(s2.id) from github_repo_snapshot s2 where s2.repo_id = s.repo_id
+                )
+            ),
+            latest_snapshot as (
+                select s.*
+                from github_repo_snapshot s
+                where s.id = (
+                    select max(s2.id) from github_repo_snapshot s2 where s2.repo_id = s.repo_id
+                )
+            )
+            select
+                r.id,
+                r.full_name,
+                r.url,
+                r.description,
+                r.language,
+                r.topics,
+                r.license,
+                latest_snapshot.stars as latest_stars,
+                latest_snapshot.forks as latest_forks,
+                latest_snapshot.open_issues as latest_open_issues,
+                latest_snapshot.pushed_at as latest_pushed_at,
+                latest_snapshot.captured_at as latest_captured_at,
+                first_snapshot.stars as first_stars,
+                first_snapshot.forks as first_forks,
+                first_snapshot.captured_at as first_captured_at,
+                latest_snapshot.stars - first_snapshot.stars as stars_delta,
+                latest_snapshot.forks - first_snapshot.forks as forks_delta
+            from github_repo r
+            join first_snapshot on first_snapshot.repo_id = r.id
+            join latest_snapshot on latest_snapshot.repo_id = r.id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+def list_top_signals(limit: int = 10) -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            select id, title, url, source_type, summary, published_at, signal_score, status, raw_content
+            from signal
+            where status = 'discovered'
+            order by signal_score desc, fetched_at desc, id desc
+            limit ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
 def init() -> None:
     init_database()
+
+
 
 
