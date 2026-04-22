@@ -1,4 +1,4 @@
-# AI Signal Radar v0.1 任务清单
+﻿# AI Signal Radar v0.1 任务清单
 
 ## 1. v0.1 目标
 
@@ -226,9 +226,13 @@ duration_ms
 - Reddit API。
 - YouTube API。
 
+### 注意
+
+- GitHub Search v0.1 先保证链路跑通；query 初版可能偏宽，后续在评分与排序阶段收紧 AI 相关性。
+
 ### 验收
 
-- 能从 `sources.yaml` 加载信源。
+- 能从 sources.yaml 加载信源。
 - 能采集至少一个 RSS 源。
 - 能采集 GitHub repo。
 - 同一个 repo 多次采集能产生多条 snapshot。
@@ -409,3 +413,4 @@ v0.1 开发时需要保留这些接口边界：
 - Scoring rule registry。
 
 这些不需要 v0.1 完整实现，但命名和模块边界要留好。
+

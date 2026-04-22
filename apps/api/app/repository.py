@@ -205,6 +205,33 @@ def list_recent_signals(limit: int = 10) -> list[dict[str, Any]]:
         ).fetchall()
         return [dict(row) for row in rows]
 
+def list_recent_github_repos(limit: int = 10) -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            select
+                r.id,
+                r.full_name,
+                r.url,
+                r.description,
+                r.language,
+                s.stars,
+                s.forks,
+                s.open_issues,
+                s.captured_at
+            from github_repo r
+            join github_repo_snapshot s on s.repo_id = r.id
+            where s.id = (
+                select max(s2.id) from github_repo_snapshot s2 where s2.repo_id = r.id
+            )
+            order by s.captured_at desc, s.stars desc
+            limit ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
 def init() -> None:
     init_database()
+
 

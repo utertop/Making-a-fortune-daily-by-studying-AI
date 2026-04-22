@@ -14,7 +14,10 @@ sources:
       - open-source
     poll_interval_minutes: 1440
     allowlist_domain: api.github.com
-    query: 'topic:ai OR "AI agent" OR "coding agent" OR MCP OR RAG'
+    sort: stars
+    order: desc
+    per_page: 20
+    query: 'AI agent in:name,description,readme stars:>50'
 
   - name: OpenAI News
     type: rss
@@ -63,3 +66,4 @@ sources:
       - developer-community
     poll_interval_minutes: 1440
     allowlist_domain: hacker-news.firebaseio.com
+
