@@ -1,0 +1,24 @@
+﻿# Python
+.venv/
+.pip-cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node
+node_modules/
+.npm-cache/
+.next/
+out/
+
+# Local data
+/data/*.db
+/data/*.db-*
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
