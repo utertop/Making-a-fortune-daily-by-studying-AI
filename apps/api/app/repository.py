@@ -143,5 +143,68 @@ def count_rows(table: str) -> int:
         return int(row["count"])
 
 
+def upsert_signal(signal: dict[str, Any]) -> tuple[int, bool]:
+    with get_connection() as connection:
+        existing = connection.execute("select id from signal where url = ?", (signal["url"],)).fetchone()
+        connection.execute(
+            """
+            insert into signal (
+                title, url, source_id, source_type, raw_content, summary, published_at,
+                fetched_at, signal_score, freshness_score, velocity_score, authority_score,
+                resonance_score, relevance_score, actionability_score, status
+            ) values (?, ?, ?, ?, ?, ?, ?, coalesce(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(url) do update set
+                title = excluded.title,
+                source_id = excluded.source_id,
+                source_type = excluded.source_type,
+                raw_content = excluded.raw_content,
+                summary = excluded.summary,
+                published_at = excluded.published_at,
+                signal_score = excluded.signal_score,
+                freshness_score = excluded.freshness_score,
+                velocity_score = excluded.velocity_score,
+                authority_score = excluded.authority_score,
+                resonance_score = excluded.resonance_score,
+                relevance_score = excluded.relevance_score,
+                actionability_score = excluded.actionability_score,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                signal["title"],
+                signal["url"],
+                signal.get("source_id"),
+                signal.get("source_type"),
+                signal.get("raw_content"),
+                signal.get("summary"),
+                signal.get("published_at"),
+                signal.get("fetched_at"),
+                signal.get("signal_score", 0),
+                signal.get("freshness_score", 0),
+                signal.get("velocity_score", 0),
+                signal.get("authority_score", 0),
+                signal.get("resonance_score", 0),
+                signal.get("relevance_score", 0),
+                signal.get("actionability_score", 0),
+                signal.get("status", "discovered"),
+            ),
+        )
+        row = connection.execute("select id from signal where url = ?", (signal["url"],)).fetchone()
+        return int(row["id"]), existing is None
+
+
+def list_recent_signals(limit: int = 10) -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            select id, title, url, source_type, published_at, signal_score, status
+            from signal
+            order by fetched_at desc, id desc
+            limit ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
 def init() -> None:
     init_database()
+
