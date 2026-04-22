@@ -10,6 +10,7 @@ node_modules/
 .npm-cache/
 .next/
 out/
+*.tsbuildinfo
 
 # Local data
 /data/*.db
