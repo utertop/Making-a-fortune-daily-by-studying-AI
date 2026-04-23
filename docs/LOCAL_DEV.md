@@ -33,6 +33,23 @@ Open:
 http://127.0.0.1:3100
 ```
 
+## Today Workspace API
+
+The web workspace reads and updates local task state through the backend:
+
+```text
+GET  http://127.0.0.1:8000/tasks/today?limit=10
+POST http://127.0.0.1:8000/tasks/{task_id}/status
+```
+
+Supported task statuses:
+
+```text
+pending, pushed, selected, documented, archived, ignored
+```
+
+Opening the workspace creates local `learning_task` rows from the current Top Signals if they do not already exist.
+
 ## Feishu Push
 
 Detailed setup guide: `docs/FEISHU_WEBHOOK.md`.
@@ -61,6 +78,5 @@ The script does not send anything unless `--send` is provided.
 
 ## Security Rules
 
-Before committing, read docs/SECURITY_RULES.md. Do not commit .env, tokens, webhook URLs, local databases, caches, logs, .venv/, or 
-ode_modules/.
+Before committing, read docs/SECURITY_RULES.md. Do not commit .env, tokens, webhook URLs, local databases, caches, logs, .venv/, or node_modules/.
 

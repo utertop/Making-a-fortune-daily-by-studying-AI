@@ -5,6 +5,8 @@ from typing import Any
 
 from .db import get_connection, init_database
 
+TASK_STATUSES = {"pending", "pushed", "selected", "documented", "archived", "ignored"}
+
 
 def _json_or_none(value: Any) -> str | None:
     if value is None:
@@ -287,6 +289,196 @@ def list_top_signals(limit: int = 10) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+def ensure_learning_task_for_signal(signal_id: int) -> int:
+    with get_connection() as connection:
+        existing = connection.execute(
+            """
+            select id
+            from learning_task
+            where signal_id = ? and task_type = 'knowledge_doc'
+            order by id asc
+            limit 1
+            """,
+            (signal_id,),
+        ).fetchone()
+        if existing:
+            return int(existing["id"])
+
+        signal = connection.execute(
+            """
+            select id, title, url, signal_score
+            from signal
+            where id = ?
+            """,
+            (signal_id,),
+        ).fetchone()
+        if signal is None:
+            raise ValueError(f"Signal not found: {signal_id}")
+
+        priority = "high" if float(signal["signal_score"] or 0) >= 50 else "medium"
+        cursor = connection.execute(
+            """
+            insert into learning_task (
+                signal_id, title, task_type, status, priority, source_url
+            ) values (?, ?, 'knowledge_doc', 'pending', ?, ?)
+            """,
+            (signal["id"], signal["title"], priority, signal["url"]),
+        )
+        return int(cursor.lastrowid)
+
+def ensure_today_tasks_from_top_signals(limit: int = 10) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(limit, 50))
+    for signal in list_top_signals(limit=safe_limit):
+        ensure_learning_task_for_signal(int(signal["id"]))
+    return list_today_tasks(limit=safe_limit)
+
+def list_today_tasks(limit: int = 10) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(limit, 50))
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            select
+                t.id,
+                t.signal_id,
+                t.title,
+                t.task_type,
+                t.status,
+                t.priority,
+                t.source_url,
+                t.target_doc_path,
+                t.selected_at,
+                t.started_at,
+                t.doc_submitted_at,
+                t.reviewed_at,
+                t.archived_at,
+                t.created_at,
+                t.updated_at,
+                s.summary,
+                s.signal_score,
+                s.source_type,
+                s.raw_content
+            from learning_task t
+            left join signal s on s.id = t.signal_id
+            where t.task_type = 'knowledge_doc'
+            order by
+                case t.status
+                    when 'pending' then 1
+                    when 'pushed' then 2
+                    when 'selected' then 3
+                    when 'documented' then 4
+                    when 'archived' then 5
+                    when 'ignored' then 6
+                    else 7
+                end,
+                s.signal_score desc,
+                t.created_at desc,
+                t.id desc
+            limit ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+def today_task_summary(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {status: 0 for status in TASK_STATUSES}
+    for task in tasks:
+        status = task.get("status") or "pending"
+        if status in counts:
+            counts[status] += 1
+
+    done_count = counts["documented"] + counts["archived"] + counts["ignored"]
+    actionable_count = max(0, len(tasks) - counts["ignored"])
+    return {
+        "total": len(tasks),
+        "pending": counts["pending"],
+        "pushed": counts["pushed"],
+        "selected": counts["selected"],
+        "documented": counts["documented"],
+        "archived": counts["archived"],
+        "ignored": counts["ignored"],
+        "done_count": done_count,
+        "actionable_count": actionable_count,
+        "is_complete": actionable_count > 0 and done_count >= actionable_count,
+    }
+
+def update_learning_task_status(
+    task_id: int,
+    status: str,
+    target_doc_path: str | None = None,
+) -> dict[str, Any]:
+    if status not in TASK_STATUSES:
+        raise ValueError(f"Unsupported task status: {status}")
+
+    timestamp_field = {
+        "selected": "selected_at",
+        "documented": "doc_submitted_at",
+        "archived": "archived_at",
+    }.get(status)
+
+    with get_connection() as connection:
+        task = connection.execute(
+            "select id from learning_task where id = ?",
+            (task_id,),
+        ).fetchone()
+        if task is None:
+            raise ValueError(f"Task not found: {task_id}")
+
+        if timestamp_field:
+            connection.execute(
+                f"""
+                update learning_task
+                set
+                    status = ?,
+                    target_doc_path = coalesce(?, target_doc_path),
+                    {timestamp_field} = coalesce({timestamp_field}, CURRENT_TIMESTAMP),
+                    updated_at = CURRENT_TIMESTAMP
+                where id = ?
+                """,
+                (status, target_doc_path, task_id),
+            )
+        else:
+            connection.execute(
+                """
+                update learning_task
+                set
+                    status = ?,
+                    target_doc_path = coalesce(?, target_doc_path),
+                    updated_at = CURRENT_TIMESTAMP
+                where id = ?
+                """,
+                (status, target_doc_path, task_id),
+            )
+
+        row = connection.execute(
+            """
+            select
+                t.id,
+                t.signal_id,
+                t.title,
+                t.task_type,
+                t.status,
+                t.priority,
+                t.source_url,
+                t.target_doc_path,
+                t.selected_at,
+                t.started_at,
+                t.doc_submitted_at,
+                t.reviewed_at,
+                t.archived_at,
+                t.created_at,
+                t.updated_at,
+                s.summary,
+                s.signal_score,
+                s.source_type,
+                s.raw_content
+            from learning_task t
+            left join signal s on s.id = t.signal_id
+            where t.id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        return dict(row)
 
 def init() -> None:
     init_database()

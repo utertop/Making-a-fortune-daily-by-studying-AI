@@ -172,6 +172,35 @@ h3 {
   margin-top: 8px;
 }
 
+.task-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.task-summary-grid div {
+  min-width: 0;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.task-summary-grid span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.task-summary-grid p {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .section-heading {
   display: flex;
   align-items: flex-end;
@@ -240,6 +269,40 @@ h3 {
   text-align: center;
 }
 
+.status-badge {
+  flex: 0 0 auto;
+  max-width: 180px;
+  padding: 6px 9px;
+  color: var(--accent-strong);
+  background: var(--panel-soft);
+  border: 1px solid #d4e3df;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.status-documented,
+.status-archived {
+  color: #ffffff;
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.status-ignored {
+  color: var(--muted);
+  background: #f2f4f7;
+  border-color: var(--line);
+}
+
+.status-selected,
+.status-pushed {
+  color: var(--warning);
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
 .signal-summary {
   margin-bottom: 16px;
 }
@@ -297,10 +360,48 @@ dd {
   color: var(--muted);
 }
 
+.doc-path {
+  margin: 0 0 12px;
+  color: var(--accent-strong);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-actions button {
+  min-height: 34px;
+  padding: 7px 11px;
+  color: var(--text);
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.task-actions button:hover:not(:disabled) {
+  color: var(--accent-strong);
+  border-color: #a7c9c2;
+}
+
+.task-actions button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
 @media (max-width: 920px) {
   .today-grid,
   .workflow-strip,
-  .metric-grid {
+  .metric-grid,
+  .task-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -317,7 +418,8 @@ dd {
 
   .today-grid,
   .workflow-strip,
-  .metric-grid {
+  .metric-grid,
+  .task-summary-grid {
     grid-template-columns: 1fr;
   }
 
