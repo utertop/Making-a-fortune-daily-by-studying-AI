@@ -974,7 +974,7 @@ FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxx
 2. 至少提交 1 篇 Markdown 知识库文档
 
 入口：
-http://localhost:3000/today
+http://localhost:3100/today
 ```
 
 ### 8.2 每日 AI 雷达

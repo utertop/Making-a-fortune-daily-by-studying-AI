@@ -7,7 +7,7 @@ import httpx
 from ..settings import get_env
 
 
-def build_today_task_text(signals: list[dict[str, Any]], workspace_url: str = "http://127.0.0.1:3000") -> str:
+def build_today_task_text(signals: list[dict[str, Any]], workspace_url: str = "http://127.0.0.1:3100") -> str:
     lines = [
         "今日 AI 学习任务",
         "",
