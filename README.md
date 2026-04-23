@@ -2,7 +2,27 @@
 
 AI Signal Radar is a local-first AI intelligence radar, personal learning workspace, and Markdown knowledge-base pipeline.
 
-Current phase: v0.1 skeleton.
+Current phase: v0.1 local workflow.
+
+## Quick Start
+
+Run the local daily workflow:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\daily_flow.py
+```
+
+Start the local API and Web workspace:
+
+```powershell
+.\scripts\start_local.ps1
+```
+
+Open:
+
+```text
+http://127.0.0.1:3100
+```
 
 ## Documents
 
@@ -19,6 +39,8 @@ Current phase: v0.1 skeleton.
 - Feishu task push
 - Today Workspace
 - Markdown knowledge-base submission
+- Markdown draft generation
+- One-command local daily flow
 
 
 

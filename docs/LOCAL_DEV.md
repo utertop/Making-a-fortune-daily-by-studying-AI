@@ -33,6 +33,44 @@ Open:
 http://127.0.0.1:3100
 ```
 
+## One-command Local Startup
+
+Start backend and frontend in two PowerShell windows:
+
+```powershell
+.\scripts\start_local.ps1
+```
+
+The script starts:
+
+```text
+API: http://127.0.0.1:8000
+Web: http://127.0.0.1:3100
+```
+
+## Daily Flow
+
+Run collection, GitHub scoring, Today Workspace task preparation, and Feishu preview:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\daily_flow.py
+```
+
+Send the Feishu message for real:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\daily_flow.py --send
+```
+
+Useful options:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\daily_flow.py --skip-rss
+.\.venv\Scripts\python.exe scripts\daily_flow.py --skip-github
+.\.venv\Scripts\python.exe scripts\daily_flow.py --skip-push
+.\.venv\Scripts\python.exe scripts\daily_flow.py --limit 5
+```
+
 ## Today Workspace API
 
 The web workspace reads and updates local task state through the backend:
