@@ -114,6 +114,10 @@ function formatDelta(value?: number) {
   return value > 0 ? `+${value}` : `${value}`;
 }
 
+function slugify(value: string) {
+  return value.toLowerCase().replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "knowledge-doc";
+}
+
 function buildSummary(tasks: TodayTask[]): TodaySummary {
   const summary: TodaySummary = {
     total: tasks.length,
@@ -187,7 +191,7 @@ export default function TodayWorkspace({
     return (
       documentDrafts[task.id] ?? {
         title: task.document_title ?? `${task.title} \u6280\u672f\u7b14\u8bb0`,
-        path: task.document_path ?? task.target_doc_path ?? `knowledge/projects/${task.title}.md`,
+        path: task.document_path ?? task.target_doc_path ?? `knowledge-base/projects/${slugify(task.title)}-${task.id}.md`,
         summary: task.document_summary ?? task.summary ?? "",
         tags: "ai,github,signal",
         confidence: "medium",
@@ -258,13 +262,47 @@ export default function TodayWorkspace({
     }
   }
 
+  async function generateDraft(task: TodayTask) {
+    setBusyTaskId(task.id);
+    setError("");
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/tasks/${task.id}/draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ overwrite: false }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`API returned ${response.status}`);
+      }
+
+      const payload = (await response.json()) as { task: TodayTask; draft: { path: string } };
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) => (currentTask.id === payload.task.id ? payload.task : currentTask)),
+      );
+      setDocumentDrafts((currentDrafts) => ({
+        ...currentDrafts,
+        [task.id]: {
+          ...getDocumentDraft(payload.task),
+          path: payload.draft.path,
+        },
+      }));
+      setDocumentTaskId(task.id);
+    } catch (draftError) {
+      setError(draftError instanceof Error ? draftError.message : "Unable to generate draft");
+    } finally {
+      setBusyTaskId(null);
+    }
+  }
+
   return (
     <main className="page-shell">
       <section className="workspace-header">
         <p className="eyebrow">v0.1 Local Workspace</p>
         <h1>AI Signal Radar</h1>
         <p className="summary">
-          {"\u4eca\u65e5\u5de5\u4f5c\u53f0\u5df2\u63a5\u5165\u672c\u5730\u4efb\u52a1\u72b6\u6001\uff1a\u63a8\u9001\u540e\u53ef\u6807\u8bb0\u8ddf\u8fdb\uff0c\u63d0\u4ea4 Markdown \u6587\u6863\u540e\u53ef\u8bb0\u5f55\u5b8c\u6210\u3002"}
+          {"\u4eca\u65e5\u5de5\u4f5c\u53f0\u5df2\u63a5\u5165\u672c\u5730\u4efb\u52a1\u72b6\u6001\u548c Markdown \u8349\u7a3f\u751f\u6210\uff1a\u5148\u751f\u6210\u6807\u51c6\u77e5\u8bc6\u5e93\u6a21\u677f\uff0c\u518d\u4ea4\u7ed9 Codex / Antigravity \u8865\u5168\u5185\u5bb9\u3002"}
         </p>
       </section>
 
@@ -490,6 +528,15 @@ export default function TodayWorkspace({
                           type="button"
                         >
                           {"\u9009\u62e9\u8ddf\u8fdb"}
+                        </button>
+                      ) : null}
+                      {allowed.has("documented") ? (
+                        <button
+                          disabled={isBusy}
+                          onClick={() => generateDraft(task)}
+                          type="button"
+                        >
+                          {"\u751f\u6210 Markdown \u8349\u7a3f"}
                         </button>
                       ) : null}
                       {allowed.has("documented") ? (

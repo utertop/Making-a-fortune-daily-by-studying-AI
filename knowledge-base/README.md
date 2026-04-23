@@ -11,3 +11,4 @@ Current structure:
 - `people/`: key people and viewpoints
 - `companies/`: company and lab updates
 - `comparisons/`: cross-project and concept comparisons
+- `templates/`: reusable Markdown templates for generated drafts

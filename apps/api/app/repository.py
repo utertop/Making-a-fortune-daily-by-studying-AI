@@ -496,6 +496,108 @@ def update_learning_task_status(
         ).fetchone()
         return dict(row)
 
+def get_task_for_markdown_draft(task_id: int) -> dict[str, Any]:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            select
+                t.id,
+                t.signal_id,
+                t.title,
+                t.status,
+                t.source_url,
+                t.target_doc_path,
+                s.summary,
+                s.signal_score,
+                s.source_type,
+                s.raw_content
+            from learning_task t
+            left join signal s on s.id = t.signal_id
+            where t.id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Task not found: {task_id}")
+        return dict(row)
+
+def attach_draft_document_to_task(
+    task_id: int,
+    title: str,
+    path: str,
+    content: str,
+    summary: str | None = None,
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    clean_title = title.strip()
+    clean_path = path.strip()
+    if not clean_title:
+        raise ValueError("Document title is required")
+    if not clean_path:
+        raise ValueError("Document path is required")
+
+    with get_connection() as connection:
+        task = connection.execute(
+            """
+            select id, status, source_url
+            from learning_task
+            where id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        if task is None:
+            raise ValueError(f"Task not found: {task_id}")
+
+        existing_document = connection.execute(
+            "select slug from knowledge_document where path = ?",
+            (clean_path,),
+        ).fetchone()
+        slug = existing_document["slug"] if existing_document else f"{_slugify(clean_title)}-{task_id}"
+
+        connection.execute(
+            """
+            insert into knowledge_document (
+                title, slug, type, path, source_url, content, summary,
+                tags, confidence, created_by_agent
+            ) values (?, ?, 'project_note', ?, ?, ?, ?, ?, 'draft', 'template')
+            on conflict(path) do update set
+                title = excluded.title,
+                source_url = excluded.source_url,
+                content = excluded.content,
+                summary = excluded.summary,
+                tags = excluded.tags,
+                confidence = excluded.confidence,
+                created_by_agent = excluded.created_by_agent,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                clean_title,
+                slug,
+                clean_path,
+                task["source_url"],
+                content,
+                summary,
+                _json_or_none(tags or ["ai", "github", "signal"]),
+            ),
+        )
+
+        next_status = "selected" if task["status"] in {"pending", "pushed"} else task["status"]
+        connection.execute(
+            """
+            update learning_task
+            set
+                status = ?,
+                target_doc_path = ?,
+                selected_at = coalesce(selected_at, CURRENT_TIMESTAMP),
+                started_at = coalesce(started_at, CURRENT_TIMESTAMP),
+                updated_at = CURRENT_TIMESTAMP
+            where id = ?
+            """,
+            (next_status, clean_path, task_id),
+        )
+
+    return update_learning_task_status(task_id=task_id, status=next_status, target_doc_path=clean_path)
+
 def submit_knowledge_document_for_task(
     task_id: int,
     title: str,
