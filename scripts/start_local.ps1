@@ -5,9 +5,14 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $PythonExe = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+$NextCmd = Join-Path $RepoRoot "apps\web\node_modules\.bin\next.cmd"
 
 if (-not (Test-Path $PythonExe)) {
     throw "Python virtual environment not found: $PythonExe"
+}
+
+if (-not (Test-Path $NextCmd)) {
+    throw "Next.js command shim not found. Run scripts\install_web_deps.cmd first."
 }
 
 Start-Process powershell -ArgumentList @(

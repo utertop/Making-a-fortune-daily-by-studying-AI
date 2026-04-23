@@ -27,6 +27,12 @@ npm.cmd install
 npm.cmd run dev
 ```
 
+Project-local install shortcut:
+
+```powershell
+scripts\install_web_deps.cmd
+```
+
 Open:
 
 ```text
@@ -39,6 +45,12 @@ Start backend and frontend in two PowerShell windows:
 
 ```powershell
 .\scripts\start_local.ps1
+```
+
+If PowerShell execution policy blocks `.ps1` scripts, use:
+
+```powershell
+scripts\start_local.cmd
 ```
 
 The script starts:
@@ -56,6 +68,12 @@ Run collection, GitHub scoring, Today Workspace task preparation, and Feishu pre
 .\.venv\Scripts\python.exe scripts\daily_flow.py
 ```
 
+Windows shortcut:
+
+```powershell
+scripts\daily_flow.cmd
+```
+
 Send the Feishu message for real:
 
 ```powershell
@@ -69,6 +87,22 @@ Useful options:
 .\.venv\Scripts\python.exe scripts\daily_flow.py --skip-github
 .\.venv\Scripts\python.exe scripts\daily_flow.py --skip-push
 .\.venv\Scripts\python.exe scripts\daily_flow.py --limit 5
+```
+
+## Local Doctor
+
+Check local readiness:
+
+```powershell
+scripts\doctor.cmd
+```
+
+The doctor checks the local database, knowledge-base folders, Feishu webhook presence, API/Web reachability, and common Web dependency problems.
+
+If it reports missing Next.js command shim or type definitions, run:
+
+```powershell
+scripts\install_web_deps.cmd
 ```
 
 ## Today Workspace API

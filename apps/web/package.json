@@ -1,11 +1,11 @@
-﻿{
+{
   "name": "ai-signal-radar-web",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3100",
-    "build": "next build",
-    "start": "next start -p 3100",
+    "dev": "set NEXT_TEST_WASM_DIR=node_modules\\@next\\swc-wasm-nodejs&& next dev -p 3100 --webpack",
+    "build": "set NEXT_TEST_WASM_DIR=node_modules\\@next\\swc-wasm-nodejs&& next build --webpack",
+    "start": "set NEXT_TEST_WASM_DIR=node_modules\\@next\\swc-wasm-nodejs&& next start -p 3100",
     "lint": "next lint"
   },
   "dependencies": {
@@ -14,9 +14,10 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.0.0",
+    "@next/swc-wasm-nodejs": "^16.2.4",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0"
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.0.0"
   }
 }
