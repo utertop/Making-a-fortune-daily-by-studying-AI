@@ -40,6 +40,7 @@ The web workspace reads and updates local task state through the backend:
 ```text
 GET  http://127.0.0.1:8000/tasks/today?limit=10
 POST http://127.0.0.1:8000/tasks/{task_id}/status
+POST http://127.0.0.1:8000/tasks/{task_id}/document
 ```
 
 Supported task statuses:
@@ -49,6 +50,8 @@ pending, pushed, selected, documented, archived, ignored
 ```
 
 Opening the workspace creates local `learning_task` rows from the current Top Signals if they do not already exist.
+
+Submitting a Markdown document creates or updates a `knowledge_document` row, stores the document path on the task, and marks that task as `documented`.
 
 ## Feishu Push
 

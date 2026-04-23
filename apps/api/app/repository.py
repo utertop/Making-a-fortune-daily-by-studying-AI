@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from .db import get_connection, init_database
@@ -12,6 +13,11 @@ def _json_or_none(value: Any) -> str | None:
     if value is None:
         return None
     return json.dumps(value, ensure_ascii=False)
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
+    return slug or "knowledge-doc"
 
 
 def upsert_source(source: dict[str, Any]) -> int:
@@ -357,9 +363,14 @@ def list_today_tasks(limit: int = 10) -> list[dict[str, Any]]:
                 s.summary,
                 s.signal_score,
                 s.source_type,
-                s.raw_content
+                s.raw_content,
+                d.id as document_id,
+                d.title as document_title,
+                d.path as document_path,
+                d.summary as document_summary
             from learning_task t
             left join signal s on s.id = t.signal_id
+            left join knowledge_document d on d.path = t.target_doc_path
             where t.task_type = 'knowledge_doc'
             order by
                 case t.status
@@ -471,9 +482,126 @@ def update_learning_task_status(
                 s.summary,
                 s.signal_score,
                 s.source_type,
-                s.raw_content
+                s.raw_content,
+                d.id as document_id,
+                d.title as document_title,
+                d.path as document_path,
+                d.summary as document_summary
             from learning_task t
             left join signal s on s.id = t.signal_id
+            left join knowledge_document d on d.path = t.target_doc_path
+            where t.id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        return dict(row)
+
+def submit_knowledge_document_for_task(
+    task_id: int,
+    title: str,
+    path: str,
+    summary: str | None = None,
+    tags: list[str] | None = None,
+    confidence: str | None = None,
+    content: str | None = None,
+    created_by_agent: str | None = None,
+) -> dict[str, Any]:
+    clean_title = title.strip()
+    clean_path = path.strip()
+    if not clean_title:
+        raise ValueError("Document title is required")
+    if not clean_path:
+        raise ValueError("Document path is required")
+
+    with get_connection() as connection:
+        task = connection.execute(
+            """
+            select id, title, source_url
+            from learning_task
+            where id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        if task is None:
+            raise ValueError(f"Task not found: {task_id}")
+
+        existing_document = connection.execute(
+            "select id, slug from knowledge_document where path = ?",
+            (clean_path,),
+        ).fetchone()
+        slug = existing_document["slug"] if existing_document else f"{_slugify(clean_title)}-{task_id}"
+
+        connection.execute(
+            """
+            insert into knowledge_document (
+                title, slug, type, path, source_url, content, summary,
+                tags, confidence, created_by_agent
+            ) values (?, ?, 'project_note', ?, ?, ?, ?, ?, ?, ?)
+            on conflict(path) do update set
+                title = excluded.title,
+                source_url = excluded.source_url,
+                content = excluded.content,
+                summary = excluded.summary,
+                tags = excluded.tags,
+                confidence = excluded.confidence,
+                created_by_agent = excluded.created_by_agent,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                clean_title,
+                slug,
+                clean_path,
+                task["source_url"],
+                content,
+                summary,
+                _json_or_none(tags),
+                confidence,
+                created_by_agent,
+            ),
+        )
+
+        connection.execute(
+            """
+            update learning_task
+            set
+                status = 'documented',
+                target_doc_path = ?,
+                doc_submitted_at = coalesce(doc_submitted_at, CURRENT_TIMESTAMP),
+                updated_at = CURRENT_TIMESTAMP
+            where id = ?
+            """,
+            (clean_path, task_id),
+        )
+
+        row = connection.execute(
+            """
+            select
+                t.id,
+                t.signal_id,
+                t.title,
+                t.task_type,
+                t.status,
+                t.priority,
+                t.source_url,
+                t.target_doc_path,
+                t.selected_at,
+                t.started_at,
+                t.doc_submitted_at,
+                t.reviewed_at,
+                t.archived_at,
+                t.created_at,
+                t.updated_at,
+                s.summary,
+                s.signal_score,
+                s.source_type,
+                s.raw_content,
+                d.id as document_id,
+                d.title as document_title,
+                d.path as document_path,
+                d.summary as document_summary
+            from learning_task t
+            left join signal s on s.id = t.signal_id
+            left join knowledge_document d on d.path = t.target_doc_path
             where t.id = ?
             """,
             (task_id,),

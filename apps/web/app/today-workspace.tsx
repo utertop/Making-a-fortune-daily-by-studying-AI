@@ -18,6 +18,10 @@ export type TodayTask = {
   archived_at: string | null;
   created_at: string;
   updated_at: string;
+  document_id: number | null;
+  document_title: string | null;
+  document_path: string | null;
+  document_summary: string | null;
   summary: string | null;
   signal_score: number | null;
   source_type: string | null;
@@ -62,6 +66,15 @@ type TodayWorkspaceProps = {
   initialError?: string;
   initialSummary: TodaySummary | null;
   initialTasks: TodayTask[];
+};
+
+type DocumentDraft = {
+  title: string;
+  path: string;
+  summary: string;
+  tags: string;
+  confidence: string;
+  created_by_agent: string;
 };
 
 const statusLabels: Record<TaskStatus, string> = {
@@ -135,6 +148,8 @@ export default function TodayWorkspace({
   const [tasks, setTasks] = useState(initialTasks);
   const [error, setError] = useState(initialError ?? "");
   const [busyTaskId, setBusyTaskId] = useState<number | null>(null);
+  const [documentTaskId, setDocumentTaskId] = useState<number | null>(null);
+  const [documentDrafts, setDocumentDrafts] = useState<Record<number, DocumentDraft>>({});
   const allowedStatuses = initialAllowedStatuses.length > 0 ? initialAllowedStatuses : Object.keys(statusLabels);
   const liveSummary = useMemo(() => buildSummary(tasks), [tasks]);
   const today = new Intl.DateTimeFormat("zh-CN", {
@@ -143,11 +158,6 @@ export default function TodayWorkspace({
   }).format(new Date());
 
   async function updateTaskStatus(taskId: number, status: TaskStatus) {
-    let targetDocPath: string | null = null;
-    if (status === "documented") {
-      targetDocPath = window.prompt("\u8f93\u5165 Markdown \u6587\u6863\u8def\u5f84\uff08\u53ef\u7559\u7a7a\uff09", "") || null;
-    }
-
     setBusyTaskId(taskId);
     setError("");
 
@@ -155,7 +165,7 @@ export default function TodayWorkspace({
       const response = await fetch(`${apiBaseUrl}/tasks/${taskId}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status, target_doc_path: targetDocPath }),
+        body: JSON.stringify({ status }),
       });
 
       if (!response.ok) {
@@ -168,6 +178,81 @@ export default function TodayWorkspace({
       );
     } catch (updateError) {
       setError(updateError instanceof Error ? updateError.message : "Unable to update task status");
+    } finally {
+      setBusyTaskId(null);
+    }
+  }
+
+  function getDocumentDraft(task: TodayTask): DocumentDraft {
+    return (
+      documentDrafts[task.id] ?? {
+        title: task.document_title ?? `${task.title} \u6280\u672f\u7b14\u8bb0`,
+        path: task.document_path ?? task.target_doc_path ?? `knowledge/projects/${task.title}.md`,
+        summary: task.document_summary ?? task.summary ?? "",
+        tags: "ai,github,signal",
+        confidence: "medium",
+        created_by_agent: "manual",
+      }
+    );
+  }
+
+  function updateDocumentDraft(taskId: number, patch: Partial<DocumentDraft>) {
+    setDocumentDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [taskId]: {
+        ...(
+          currentDrafts[taskId] ?? {
+            title: "",
+            path: "",
+            summary: "",
+            tags: "",
+            confidence: "medium",
+            created_by_agent: "manual",
+          }
+        ),
+        ...patch,
+      },
+    }));
+  }
+
+  async function submitDocument(task: TodayTask) {
+    const draft = getDocumentDraft(task);
+    if (!draft.title.trim() || !draft.path.trim()) {
+      setError("\u6587\u6863\u6807\u9898\u548c\u8def\u5f84\u5fc5\u586b");
+      return;
+    }
+
+    setBusyTaskId(task.id);
+    setError("");
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/tasks/${task.id}/document`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: draft.title.trim(),
+          path: draft.path.trim(),
+          summary: draft.summary.trim() || null,
+          tags: draft.tags
+            .split(",")
+            .map((tag) => tag.trim())
+            .filter(Boolean),
+          confidence: draft.confidence.trim() || null,
+          created_by_agent: draft.created_by_agent.trim() || "manual",
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`API returned ${response.status}`);
+      }
+
+      const payload = (await response.json()) as { task: TodayTask };
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) => (currentTask.id === payload.task.id ? payload.task : currentTask)),
+      );
+      setDocumentTaskId(null);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Unable to submit document");
     } finally {
       setBusyTaskId(null);
     }
@@ -330,8 +415,62 @@ export default function TodayWorkspace({
                       <p className="risk-text muted">{"\u6682\u65e0\u660e\u663e\u98ce\u9669\u4fe1\u53f7"}</p>
                     )}
 
-                    {task.target_doc_path ? (
-                      <p className="doc-path">Markdown: {task.target_doc_path}</p>
+                    {task.document_path ?? task.target_doc_path ? (
+                      <p className="doc-path">
+                        Markdown: {task.document_title ? `${task.document_title} - ` : ""}
+                        {task.document_path ?? task.target_doc_path}
+                      </p>
+                    ) : null}
+
+                    {documentTaskId === task.id ? (
+                      <div className="document-form" aria-label={`${task.title} document form`}>
+                        <label>
+                          <span>{"\u6587\u6863\u6807\u9898"}</span>
+                          <input
+                            onChange={(event) => updateDocumentDraft(task.id, { title: event.target.value })}
+                            type="text"
+                            value={getDocumentDraft(task).title}
+                          />
+                        </label>
+                        <label>
+                          <span>{"Markdown \u8def\u5f84"}</span>
+                          <input
+                            onChange={(event) => updateDocumentDraft(task.id, { path: event.target.value })}
+                            placeholder="knowledge/projects/example.md"
+                            type="text"
+                            value={getDocumentDraft(task).path}
+                          />
+                        </label>
+                        <label>
+                          <span>{"\u6458\u8981"}</span>
+                          <textarea
+                            onChange={(event) => updateDocumentDraft(task.id, { summary: event.target.value })}
+                            rows={3}
+                            value={getDocumentDraft(task).summary}
+                          />
+                        </label>
+                        <div className="document-form-grid">
+                          <label>
+                            <span>Tags</span>
+                            <input
+                              onChange={(event) => updateDocumentDraft(task.id, { tags: event.target.value })}
+                              type="text"
+                              value={getDocumentDraft(task).tags}
+                            />
+                          </label>
+                          <label>
+                            <span>Confidence</span>
+                            <select
+                              onChange={(event) => updateDocumentDraft(task.id, { confidence: event.target.value })}
+                              value={getDocumentDraft(task).confidence}
+                            >
+                              <option value="high">high</option>
+                              <option value="medium">medium</option>
+                              <option value="low">low</option>
+                            </select>
+                          </label>
+                        </div>
+                      </div>
                     ) : null}
 
                     <div className="task-actions" aria-label={`${task.title} task actions`}>
@@ -355,11 +494,20 @@ export default function TodayWorkspace({
                       ) : null}
                       {allowed.has("documented") ? (
                         <button
-                          disabled={isBusy || task.status === "documented"}
-                          onClick={() => updateTaskStatus(task.id, "documented")}
+                          disabled={isBusy}
+                          onClick={() => setDocumentTaskId(documentTaskId === task.id ? null : task.id)}
                           type="button"
                         >
                           {"\u63d0\u4ea4\u6587\u6863"}
+                        </button>
+                      ) : null}
+                      {documentTaskId === task.id ? (
+                        <button
+                          disabled={isBusy}
+                          onClick={() => submitDocument(task)}
+                          type="button"
+                        >
+                          {"\u4fdd\u5b58\u6587\u6863\u8bb0\u5f55"}
                         </button>
                       ) : null}
                       {allowed.has("ignored") ? (
