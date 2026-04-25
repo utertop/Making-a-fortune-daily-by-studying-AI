@@ -87,6 +87,13 @@ CREATE TABLE IF NOT EXISTS learning_task (
     source_url TEXT,
     target_doc_path TEXT,
     generated_prompt TEXT,
+    draft_created_at TEXT,
+    draft_initial_hash TEXT,
+    last_detected_hash TEXT,
+    last_detected_at TEXT,
+    review_pending_at TEXT,
+    ignored_reason TEXT,
+    detection_status TEXT,
     selected_at TEXT,
     started_at TEXT,
     doc_submitted_at TEXT,
@@ -150,8 +157,20 @@ CREATE TABLE IF NOT EXISTS user_feedback (
     FOREIGN KEY(signal_id) REFERENCES signal(id)
 );
 
+CREATE TABLE IF NOT EXISTS task_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    previous_status TEXT,
+    new_status TEXT,
+    payload TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(task_id) REFERENCES learning_task(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_signal_score ON signal(signal_score DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_status ON signal(status);
 CREATE INDEX IF NOT EXISTS idx_github_repo_snapshot_repo_time ON github_repo_snapshot(repo_id, captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_learning_task_status ON learning_task(status);
+CREATE INDEX IF NOT EXISTS idx_task_event_task_time ON task_event(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_collector_run_status ON collector_run(status);

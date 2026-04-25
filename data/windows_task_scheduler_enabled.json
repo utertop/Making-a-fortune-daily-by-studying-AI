@@ -1,0 +1,11 @@
+﻿{
+    "task_path":  "\\AI Signal Radar\\",
+    "tasks":  [
+                  "Morning Push",
+                  "Afternoon Push",
+                  "Soft Deadline",
+                  "Hard Deadline"
+              ],
+    "registered_at":  "2026-04-25T19:02:04.6117191+08:00",
+    "enabled":  true
+}

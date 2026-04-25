@@ -42,6 +42,8 @@ http://127.0.0.1:3100
 - `docs/V0_1_TASKS.md`: v0.1 task checklist
 - `docs/LOCAL_DEV.md`: local development notes
 - `docs/DAILY_SOP.md`: shortest daily usage path
+- `docs/V0_1_USAGE.md`: current v0.1 usage guide
+- `docs/PHASE_13_PRODUCT_DESIGN.md`: next-stage product design for cloud, desktop, archive navigation, and push workflow
 - `docs/FEISHU_WEBHOOK.md`: Feishu webhook setup
 - `docs/SECURITY_RULES.md`: secret and local file safety rules
 

@@ -59,6 +59,7 @@ def main():
         check_path(REPO_ROOT / ".env", "local .env", required=False),
         check_path(REPO_ROOT / "data" / "local.db", "local sqlite database", required=False),
         check_path(REPO_ROOT / "knowledge-base", "knowledge base directory"),
+        check_path(REPO_ROOT / "knowledge-base" / "daily", "daily notes directory"),
         check_path(REPO_ROOT / "knowledge-base" / "projects", "project notes directory"),
         check_path(REPO_ROOT / "knowledge-base" / "templates" / "project-note.md", "project note template"),
         check_path(REPO_ROOT / "apps" / "web" / "node_modules" / ".bin" / "next.cmd", "Next.js command shim"),
@@ -82,6 +83,7 @@ def main():
     required_check_names = {
         "project python venv",
         "knowledge base directory",
+        "daily notes directory",
         "project notes directory",
         "project note template",
         "Next.js command shim",

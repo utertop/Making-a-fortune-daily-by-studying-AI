@@ -58,7 +58,97 @@ The script starts:
 ```text
 API: http://127.0.0.1:8000
 Web: http://127.0.0.1:3100
+Scheduler: enabled
 ```
+
+The local scheduler sends Feishu pushes at:
+
+```text
+08:00 morning push
+14:00 afternoon push
+21:30 soft deadline
+23:00 hard deadline
+```
+
+Use this only if you want API + Web without the local scheduler:
+
+```powershell
+scripts\start_local.cmd -NoScheduler
+```
+
+## Windows Task Scheduler
+
+If you want pushes to run even when you did not manually open the local Web page, register Windows Scheduled Tasks:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\register_windows_tasks.ps1
+```
+
+This registers four daily tasks under `\AI Signal Radar\`:
+
+```text
+Morning Push    08:00
+Afternoon Push  14:00
+Soft Deadline   21:30
+Hard Deadline   23:00
+```
+
+Preview the registration commands without changing the system:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\register_windows_tasks.ps1 -Preview
+```
+
+Remove those Scheduled Tasks:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\unregister_windows_tasks.ps1
+```
+
+After registration, `scripts\start_local.cmd` will show:
+
+```text
+Scheduler: managed by Windows Task Scheduler
+```
+
+That means local Web/API startup will no longer launch the loop scheduler by default, which avoids duplicate pushes.
+
+## Windows Startup Catch-up
+
+If you want a one-time catch-up check whenever you log in, register the Startup entry:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\register_startup_catchup.ps1
+```
+
+This creates a Startup script that runs:
+
+```text
+scripts\run_login_catchup.cmd
+```
+
+That catch-up flow checks whether any of today's scheduled jobs were missed and replays them in scheduled order.
+
+Preview without changing the system:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\register_startup_catchup.ps1 -Preview
+```
+
+Remove the Startup entry:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\unregister_startup_catchup.ps1
+```
+
+To allow access from another device on the same LAN:
+
+```powershell
+scripts\start_local.cmd --lan
+```
+
+LAN mode binds API and Web to `0.0.0.0` and prints the detected LAN URL when possible. Use it only on a trusted network.
+When the Web page is opened through a LAN IP, client-side task actions automatically call the same host on API port `8000`.
 
 ## Daily Flow
 
@@ -124,7 +214,7 @@ pending, pushed, selected, documented, archived, ignored
 
 Opening the workspace creates local `learning_task` rows from the current Top Signals if they do not already exist.
 
-Generating a draft writes a Markdown file under `knowledge-base/`, records it as a draft `knowledge_document`, and moves the task into `selected`.
+Generating a draft writes a Markdown file under `knowledge-base/daily/YYYY/MM/YYYY-MM-DD/`, records it as a draft `knowledge_document`, and moves the task into `selected`.
 
 Submitting a Markdown document creates or updates a `knowledge_document` row, stores the document path on the task, and marks that task as `documented`.
 
@@ -151,6 +241,13 @@ Send to Feishu:
 ```
 
 The script does not send anything unless `--send` is provided.
+
+Preview one local scheduled push without sending:
+
+```powershell
+.venv\Scripts\python scripts\local_scheduler.py --run-now morning_push --preview
+.venv\Scripts\python scripts\local_scheduler.py --run-now soft_deadline --preview
+```
 
 
 

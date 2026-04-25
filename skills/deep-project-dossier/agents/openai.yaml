@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deep Project Dossier"
+  short_description: "Complete an existing deep-project dossier draft into a mature research-grade markdown knowledge base"
+  default_prompt: "Use $deep-project-dossier to study the provided repo, docs, examples, releases, and key code structure, then complete the existing deep-project dossier draft under knowledge-base/."

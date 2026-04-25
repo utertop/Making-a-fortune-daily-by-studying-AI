@@ -1,0 +1,4 @@
+interface:
+  display_name: "Knowledge Base Writer"
+  short_description: "Fill an existing draft into a final project knowledge-base markdown note"
+  default_prompt: "Use $knowledge-base-writer to read the provided repo or docs and complete the existing knowledge-base draft into a final markdown note."

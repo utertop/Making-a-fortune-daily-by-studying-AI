@@ -1,12 +1,73 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import hashlib
 import json
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from .db import get_connection, init_database
+from .markdown_drafts import resolve_knowledge_path
 
-TASK_STATUSES = {"pending", "pushed", "selected", "documented", "archived", "ignored"}
+TASK_STATUSES = {
+    "pending",
+    "pushed",
+    "selected",
+    "draft_created",
+    "review_pending",
+    "documented",
+    "archived",
+    "ignored",
+}
+
+DETECTION_STATUSES = {
+    "idle",
+    "waiting_for_file",
+    "waiting_for_update",
+    "updated",
+    "documented",
+    "ignored",
+    "archived",
+}
+
+TASK_SELECT_SQL = """
+    select
+        t.id,
+        t.signal_id,
+        t.title,
+        t.task_type,
+        t.status,
+        t.priority,
+        t.source_url,
+        t.target_doc_path,
+        t.generated_prompt,
+        t.draft_created_at,
+        t.draft_initial_hash,
+        t.last_detected_hash,
+        t.last_detected_at,
+        t.review_pending_at,
+        t.ignored_reason,
+        t.detection_status,
+        t.selected_at,
+        t.started_at,
+        t.doc_submitted_at,
+        t.reviewed_at,
+        t.archived_at,
+        t.created_at,
+        t.updated_at,
+        s.summary,
+        s.signal_score,
+        s.source_type,
+        s.raw_content,
+        d.id as document_id,
+        d.title as document_title,
+        d.path as document_path,
+        d.summary as document_summary
+    from learning_task t
+    left join signal s on s.id = t.signal_id
+    left join knowledge_document d on d.path = t.target_doc_path
+"""
 
 
 def _json_or_none(value: Any) -> str | None:
@@ -18,6 +79,53 @@ def _json_or_none(value: Any) -> str | None:
 def _slugify(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")
     return slug or "knowledge-doc"
+
+
+def _fetch_task_row(connection, task_id: int) -> dict[str, Any]:
+    row = connection.execute(
+        f"""
+        {TASK_SELECT_SQL}
+        where t.id = ?
+        """,
+        (task_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Task not found: {task_id}")
+    return dict(row)
+
+
+def _record_task_event(
+    connection,
+    task_id: int,
+    event_type: str,
+    previous_status: str | None = None,
+    new_status: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    connection.execute(
+        """
+        insert into task_event (
+            task_id, event_type, previous_status, new_status, payload
+        ) values (?, ?, ?, ?, ?)
+        """,
+        (task_id, event_type, previous_status, new_status, _json_or_none(payload)),
+    )
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file_handle:
+        for chunk in iter(lambda: file_handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _iso_from_timestamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
 
 
 def upsert_source(source: dict[str, Any]) -> int:
@@ -55,7 +163,8 @@ def upsert_source(source: dict[str, Any]) -> int:
             ),
         )
         row = connection.execute(
-            "select id from source where name = ? and url = ?", (source["name"], source["url"])
+            "select id from source where name = ? and url = ?",
+            (source["name"], source["url"]),
         ).fetchone()
         return int(row["id"])
 
@@ -84,7 +193,8 @@ def upsert_github_repo(repo: dict[str, Any]) -> int:
             ),
         )
         row = connection.execute(
-            "select id from github_repo where full_name = ?", (repo["full_name"],)
+            "select id from github_repo where full_name = ?",
+            (repo["full_name"],),
         ).fetchone()
         return int(row["id"])
 
@@ -143,6 +253,7 @@ def count_rows(table: str) -> int:
         "signal",
         "learning_task",
         "knowledge_document",
+        "task_event",
     }
     if table not in allowed:
         raise ValueError(f"Unsupported table: {table}")
@@ -153,7 +264,10 @@ def count_rows(table: str) -> int:
 
 def upsert_signal(signal: dict[str, Any]) -> tuple[int, bool]:
     with get_connection() as connection:
-        existing = connection.execute("select id from signal where url = ?", (signal["url"],)).fetchone()
+        existing = connection.execute(
+            "select id from signal where url = ?",
+            (signal["url"],),
+        ).fetchone()
         connection.execute(
             """
             insert into signal (
@@ -196,7 +310,10 @@ def upsert_signal(signal: dict[str, Any]) -> tuple[int, bool]:
                 signal.get("status", "discovered"),
             ),
         )
-        row = connection.execute("select id from signal where url = ?", (signal["url"],)).fetchone()
+        row = connection.execute(
+            "select id from signal where url = ?",
+            (signal["url"],),
+        ).fetchone()
         return int(row["id"]), existing is None
 
 
@@ -212,6 +329,7 @@ def list_recent_signals(limit: int = 10) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
 
 def list_recent_github_repos(limit: int = 10) -> list[dict[str, Any]]:
     with get_connection() as connection:
@@ -238,6 +356,7 @@ def list_recent_github_repos(limit: int = 10) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
 
 def list_github_repo_scoring_inputs() -> list[dict[str, Any]]:
     with get_connection() as connection:
@@ -282,6 +401,7 @@ def list_github_repo_scoring_inputs() -> list[dict[str, Any]]:
         ).fetchall()
         return [dict(row) for row in rows]
 
+
 def list_top_signals(limit: int = 10) -> list[dict[str, Any]]:
     with get_connection() as connection:
         rows = connection.execute(
@@ -295,6 +415,7 @@ def list_top_signals(limit: int = 10) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
 
 def ensure_learning_task_for_signal(signal_id: int) -> int:
     with get_connection() as connection:
@@ -326,12 +447,21 @@ def ensure_learning_task_for_signal(signal_id: int) -> int:
         cursor = connection.execute(
             """
             insert into learning_task (
-                signal_id, title, task_type, status, priority, source_url
-            ) values (?, ?, 'knowledge_doc', 'pending', ?, ?)
+                signal_id, title, task_type, status, priority, source_url, detection_status
+            ) values (?, ?, 'knowledge_doc', 'pending', ?, ?, 'idle')
             """,
             (signal["id"], signal["title"], priority, signal["url"]),
         )
-        return int(cursor.lastrowid)
+        task_id = int(cursor.lastrowid)
+        _record_task_event(
+            connection,
+            task_id=task_id,
+            event_type="task_created",
+            new_status="pending",
+            payload={"signal_id": signal_id},
+        )
+        return task_id
+
 
 def ensure_today_tasks_from_top_signals(limit: int = 10) -> list[dict[str, Any]]:
     safe_limit = max(1, min(limit, 50))
@@ -339,48 +469,25 @@ def ensure_today_tasks_from_top_signals(limit: int = 10) -> list[dict[str, Any]]
         ensure_learning_task_for_signal(int(signal["id"]))
     return list_today_tasks(limit=safe_limit)
 
+
 def list_today_tasks(limit: int = 10) -> list[dict[str, Any]]:
     safe_limit = max(1, min(limit, 50))
     with get_connection() as connection:
         rows = connection.execute(
-            """
-            select
-                t.id,
-                t.signal_id,
-                t.title,
-                t.task_type,
-                t.status,
-                t.priority,
-                t.source_url,
-                t.target_doc_path,
-                t.selected_at,
-                t.started_at,
-                t.doc_submitted_at,
-                t.reviewed_at,
-                t.archived_at,
-                t.created_at,
-                t.updated_at,
-                s.summary,
-                s.signal_score,
-                s.source_type,
-                s.raw_content,
-                d.id as document_id,
-                d.title as document_title,
-                d.path as document_path,
-                d.summary as document_summary
-            from learning_task t
-            left join signal s on s.id = t.signal_id
-            left join knowledge_document d on d.path = t.target_doc_path
+            f"""
+            {TASK_SELECT_SQL}
             where t.task_type = 'knowledge_doc'
             order by
                 case t.status
                     when 'pending' then 1
                     when 'pushed' then 2
                     when 'selected' then 3
-                    when 'documented' then 4
-                    when 'archived' then 5
-                    when 'ignored' then 6
-                    else 7
+                    when 'draft_created' then 4
+                    when 'review_pending' then 5
+                    when 'documented' then 6
+                    when 'archived' then 7
+                    when 'ignored' then 8
+                    else 9
                 end,
                 s.signal_score desc,
                 t.created_at desc,
@@ -390,6 +497,31 @@ def list_today_tasks(limit: int = 10) -> list[dict[str, Any]]:
             (safe_limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def get_learning_tasks_by_ids(task_ids: list[int]) -> list[dict[str, Any]]:
+    unique_ids: list[int] = []
+    seen: set[int] = set()
+    for task_id in task_ids:
+        if task_id not in seen:
+            unique_ids.append(task_id)
+            seen.add(task_id)
+
+    if not unique_ids:
+        return []
+
+    placeholders = ", ".join("?" for _ in unique_ids)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            {TASK_SELECT_SQL}
+            where t.id in ({placeholders})
+            """,
+            unique_ids,
+        ).fetchall()
+        row_by_id = {int(row["id"]): dict(row) for row in rows}
+        return [row_by_id[task_id] for task_id in unique_ids if task_id in row_by_id]
+
 
 def today_task_summary(tasks: list[dict[str, Any]]) -> dict[str, Any]:
     counts = {status: 0 for status in TASK_STATUSES}
@@ -405,6 +537,8 @@ def today_task_summary(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         "pending": counts["pending"],
         "pushed": counts["pushed"],
         "selected": counts["selected"],
+        "draft_created": counts["draft_created"],
+        "review_pending": counts["review_pending"],
         "documented": counts["documented"],
         "archived": counts["archived"],
         "ignored": counts["ignored"],
@@ -413,88 +547,87 @@ def today_task_summary(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         "is_complete": actionable_count > 0 and done_count >= actionable_count,
     }
 
+
 def update_learning_task_status(
     task_id: int,
     status: str,
     target_doc_path: str | None = None,
+    ignored_reason: str | None = None,
 ) -> dict[str, Any]:
     if status not in TASK_STATUSES:
         raise ValueError(f"Unsupported task status: {status}")
-
-    timestamp_field = {
-        "selected": "selected_at",
-        "documented": "doc_submitted_at",
-        "archived": "archived_at",
-    }.get(status)
+    if status == "ignored" and not (ignored_reason or "").strip():
+        raise ValueError("Ignored tasks require a reason")
 
     with get_connection() as connection:
-        task = connection.execute(
-            "select id from learning_task where id = ?",
-            (task_id,),
-        ).fetchone()
-        if task is None:
-            raise ValueError(f"Task not found: {task_id}")
+        current = _fetch_task_row(connection, task_id)
+        previous_status = current["status"]
+        normalized_reason = ignored_reason.strip() if ignored_reason else None
+        next_target_doc_path = target_doc_path or current.get("target_doc_path")
 
-        if timestamp_field:
-            connection.execute(
-                f"""
-                update learning_task
-                set
-                    status = ?,
-                    target_doc_path = coalesce(?, target_doc_path),
-                    {timestamp_field} = coalesce({timestamp_field}, CURRENT_TIMESTAMP),
-                    updated_at = CURRENT_TIMESTAMP
-                where id = ?
-                """,
-                (status, target_doc_path, task_id),
-            )
-        else:
-            connection.execute(
-                """
-                update learning_task
-                set
-                    status = ?,
-                    target_doc_path = coalesce(?, target_doc_path),
-                    updated_at = CURRENT_TIMESTAMP
-                where id = ?
-                """,
-                (status, target_doc_path, task_id),
-            )
+        if (
+            previous_status == status
+            and next_target_doc_path == current.get("target_doc_path")
+            and normalized_reason == current.get("ignored_reason")
+        ):
+            return current
 
-        row = connection.execute(
-            """
-            select
-                t.id,
-                t.signal_id,
-                t.title,
-                t.task_type,
-                t.status,
-                t.priority,
-                t.source_url,
-                t.target_doc_path,
-                t.selected_at,
-                t.started_at,
-                t.doc_submitted_at,
-                t.reviewed_at,
-                t.archived_at,
-                t.created_at,
-                t.updated_at,
-                s.summary,
-                s.signal_score,
-                s.source_type,
-                s.raw_content,
-                d.id as document_id,
-                d.title as document_title,
-                d.path as document_path,
-                d.summary as document_summary
-            from learning_task t
-            left join signal s on s.id = t.signal_id
-            left join knowledge_document d on d.path = t.target_doc_path
-            where t.id = ?
+        updates = [
+            "status = ?",
+            "target_doc_path = coalesce(?, target_doc_path)",
+            "updated_at = CURRENT_TIMESTAMP",
+        ]
+        params: list[Any] = [status, target_doc_path]
+
+        detection_status = current.get("detection_status") or "idle"
+        if status == "selected":
+            updates.append("selected_at = coalesce(selected_at, CURRENT_TIMESTAMP)")
+            detection_status = "idle"
+        elif status == "draft_created":
+            updates.append("draft_created_at = coalesce(draft_created_at, CURRENT_TIMESTAMP)")
+            updates.append("started_at = coalesce(started_at, CURRENT_TIMESTAMP)")
+            updates.append("selected_at = coalesce(selected_at, CURRENT_TIMESTAMP)")
+            detection_status = "waiting_for_update"
+        elif status == "review_pending":
+            updates.append("review_pending_at = coalesce(review_pending_at, CURRENT_TIMESTAMP)")
+            detection_status = "updated"
+        elif status == "documented":
+            updates.append("doc_submitted_at = coalesce(doc_submitted_at, CURRENT_TIMESTAMP)")
+            detection_status = "documented"
+        elif status == "archived":
+            updates.append("archived_at = coalesce(archived_at, CURRENT_TIMESTAMP)")
+            detection_status = "archived"
+        elif status == "ignored":
+            updates.append("ignored_reason = ?")
+            params.append(normalized_reason)
+            detection_status = "ignored"
+
+        updates.append("detection_status = ?")
+        params.append(detection_status)
+        params.append(task_id)
+
+        connection.execute(
+            f"""
+            update learning_task
+            set {", ".join(updates)}
+            where id = ?
             """,
-            (task_id,),
-        ).fetchone()
-        return dict(row)
+            params,
+        )
+        _record_task_event(
+            connection,
+            task_id=task_id,
+            event_type="status_changed",
+            previous_status=previous_status,
+            new_status=status,
+            payload={
+                "target_doc_path": next_target_doc_path,
+                "ignored_reason": normalized_reason,
+                "detection_status": detection_status,
+            },
+        )
+        return _fetch_task_row(connection, task_id)
+
 
 def get_task_for_markdown_draft(task_id: int) -> dict[str, Any]:
     with get_connection() as connection:
@@ -521,6 +654,7 @@ def get_task_for_markdown_draft(task_id: int) -> dict[str, Any]:
             raise ValueError(f"Task not found: {task_id}")
         return dict(row)
 
+
 def attach_draft_document_to_task(
     task_id: int,
     title: str,
@@ -536,6 +670,7 @@ def attach_draft_document_to_task(
     if not clean_path:
         raise ValueError("Document path is required")
 
+    draft_hash = _sha256_text(content)
     with get_connection() as connection:
         task = connection.execute(
             """
@@ -581,22 +716,39 @@ def attach_draft_document_to_task(
             ),
         )
 
-        next_status = "selected" if task["status"] in {"pending", "pushed"} else task["status"]
+        previous_status = task["status"]
         connection.execute(
             """
             update learning_task
             set
-                status = ?,
+                status = 'draft_created',
                 target_doc_path = ?,
+                draft_created_at = CURRENT_TIMESTAMP,
+                draft_initial_hash = ?,
+                last_detected_hash = null,
+                last_detected_at = null,
+                review_pending_at = null,
                 selected_at = coalesce(selected_at, CURRENT_TIMESTAMP),
                 started_at = coalesce(started_at, CURRENT_TIMESTAMP),
+                detection_status = 'waiting_for_update',
                 updated_at = CURRENT_TIMESTAMP
             where id = ?
             """,
-            (next_status, clean_path, task_id),
+            (clean_path, draft_hash, task_id),
         )
+        _record_task_event(
+            connection,
+            task_id=task_id,
+            event_type="draft_created",
+            previous_status=previous_status,
+            new_status="draft_created",
+            payload={
+                "path": clean_path,
+                "draft_initial_hash": draft_hash,
+            },
+        )
+        return _fetch_task_row(connection, task_id)
 
-    return update_learning_task_status(task_id=task_id, status=next_status, target_doc_path=clean_path)
 
 def submit_knowledge_document_for_task(
     task_id: int,
@@ -618,7 +770,7 @@ def submit_knowledge_document_for_task(
     with get_connection() as connection:
         task = connection.execute(
             """
-            select id, title, source_url
+            select id, title, source_url, status
             from learning_task
             where id = ?
             """,
@@ -662,6 +814,7 @@ def submit_knowledge_document_for_task(
             ),
         )
 
+        previous_status = task["status"]
         connection.execute(
             """
             update learning_task
@@ -669,50 +822,155 @@ def submit_knowledge_document_for_task(
                 status = 'documented',
                 target_doc_path = ?,
                 doc_submitted_at = coalesce(doc_submitted_at, CURRENT_TIMESTAMP),
+                detection_status = 'documented',
                 updated_at = CURRENT_TIMESTAMP
             where id = ?
             """,
             (clean_path, task_id),
         )
+        _record_task_event(
+            connection,
+            task_id=task_id,
+            event_type="document_confirmed",
+            previous_status=previous_status,
+            new_status="documented",
+            payload={
+                "path": clean_path,
+                "confidence": confidence,
+                "created_by_agent": created_by_agent,
+            },
+        )
+        return _fetch_task_row(connection, task_id)
 
-        row = connection.execute(
+
+def detect_document_for_task(task_id: int) -> dict[str, Any]:
+    with get_connection() as connection:
+        task = _fetch_task_row(connection, task_id)
+        current_status = task["status"]
+        if current_status in {"documented", "ignored", "archived"}:
+            detection_status = {
+                "documented": "documented",
+                "ignored": "ignored",
+                "archived": "archived",
+            }[current_status]
+            connection.execute(
+                """
+                update learning_task
+                set detection_status = ?, updated_at = CURRENT_TIMESTAMP
+                where id = ?
+                """,
+                (detection_status, task_id),
+            )
+            refreshed = _fetch_task_row(connection, task_id)
+            return {"task": refreshed, "changed": False, "reason": detection_status}
+
+        target_doc_path = task.get("target_doc_path")
+        if not target_doc_path:
+            connection.execute(
+                """
+                update learning_task
+                set detection_status = 'idle', updated_at = CURRENT_TIMESTAMP
+                where id = ?
+                """,
+                (task_id,),
+            )
+            refreshed = _fetch_task_row(connection, task_id)
+            return {"task": refreshed, "changed": False, "reason": "no_target_doc_path"}
+
+        resolved_path = resolve_knowledge_path(target_doc_path)
+        if not resolved_path.exists():
+            connection.execute(
+                """
+                update learning_task
+                set detection_status = 'waiting_for_file', updated_at = CURRENT_TIMESTAMP
+                where id = ?
+                """,
+                (task_id,),
+            )
+            refreshed = _fetch_task_row(connection, task_id)
+            return {"task": refreshed, "changed": False, "reason": "missing_file"}
+
+        current_hash = _sha256_file(resolved_path)
+        draft_initial_hash = task.get("draft_initial_hash")
+        modified_at = _iso_from_timestamp(resolved_path.stat().st_mtime)
+        draft_created_at = task.get("draft_created_at")
+        has_real_update = current_hash != draft_initial_hash
+        if draft_created_at:
+            has_real_update = has_real_update and modified_at > draft_created_at
+
+        if not has_real_update:
+            connection.execute(
+                """
+                update learning_task
+                set
+                    detection_status = 'waiting_for_update',
+                    updated_at = CURRENT_TIMESTAMP
+                where id = ?
+                """,
+                (task_id,),
+            )
+            refreshed = _fetch_task_row(connection, task_id)
+            return {"task": refreshed, "changed": False, "reason": "waiting_for_update"}
+
+        previous_status = current_status
+        changed = current_status != "review_pending" or task.get("last_detected_hash") != current_hash
+        connection.execute(
             """
-            select
-                t.id,
-                t.signal_id,
-                t.title,
-                t.task_type,
-                t.status,
-                t.priority,
-                t.source_url,
-                t.target_doc_path,
-                t.selected_at,
-                t.started_at,
-                t.doc_submitted_at,
-                t.reviewed_at,
-                t.archived_at,
-                t.created_at,
-                t.updated_at,
-                s.summary,
-                s.signal_score,
-                s.source_type,
-                s.raw_content,
-                d.id as document_id,
-                d.title as document_title,
-                d.path as document_path,
-                d.summary as document_summary
-            from learning_task t
-            left join signal s on s.id = t.signal_id
-            left join knowledge_document d on d.path = t.target_doc_path
-            where t.id = ?
+            update learning_task
+            set
+                status = 'review_pending',
+                review_pending_at = coalesce(review_pending_at, CURRENT_TIMESTAMP),
+                last_detected_hash = ?,
+                last_detected_at = ?,
+                detection_status = 'updated',
+                updated_at = CURRENT_TIMESTAMP
+            where id = ?
             """,
-            (task_id,),
-        ).fetchone()
-        return dict(row)
+            (current_hash, modified_at, task_id),
+        )
+        if changed:
+            _record_task_event(
+                connection,
+                task_id=task_id,
+                event_type="document_detected",
+                previous_status=previous_status,
+                new_status="review_pending",
+                payload={
+                    "path": target_doc_path,
+                    "last_detected_hash": current_hash,
+                    "last_detected_at": modified_at,
+                },
+            )
+        refreshed = _fetch_task_row(connection, task_id)
+        return {"task": refreshed, "changed": changed, "reason": "review_pending"}
+
+
+def detect_documents(limit: int = 50) -> dict[str, Any]:
+    safe_limit = max(1, min(limit, 200))
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            {TASK_SELECT_SQL}
+            where
+                t.task_type = 'knowledge_doc'
+                and t.status in ('selected', 'draft_created', 'review_pending')
+                and t.target_doc_path is not null
+            order by t.updated_at desc, t.id desc
+            limit ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+        task_ids = [int(row["id"]) for row in rows]
+
+    results = [detect_document_for_task(task_id) for task_id in task_ids]
+    changed_tasks = [result["task"] for result in results if result["changed"]]
+    return {
+        "checked": len(results),
+        "changed": len(changed_tasks),
+        "tasks": changed_tasks,
+        "results": results,
+    }
+
 
 def init() -> None:
     init_database()
-
-
-
-
