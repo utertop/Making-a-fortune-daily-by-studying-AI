@@ -6,6 +6,9 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 from apps.api.app.db import init_database
 from apps.api.app.push.feishu import build_today_task_text, send_feishu_text
 from apps.api.app.repository import list_signal_digest_candidates
