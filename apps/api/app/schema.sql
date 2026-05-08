@@ -42,6 +42,26 @@ CREATE TABLE IF NOT EXISTS signal (
     UNIQUE(url)
 );
 
+CREATE TABLE IF NOT EXISTS signal_enrichment (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    ai_category TEXT,
+    project_type TEXT,
+    relevance TEXT,
+    priority TEXT,
+    llm_score REAL,
+    reason TEXT,
+    risk TEXT,
+    suggested_action TEXT,
+    raw_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(signal_id) REFERENCES signal(id),
+    UNIQUE(signal_id, input_hash)
+);
+
 CREATE TABLE IF NOT EXISTS entity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -170,6 +190,7 @@ CREATE TABLE IF NOT EXISTS task_event (
 
 CREATE INDEX IF NOT EXISTS idx_signal_score ON signal(signal_score DESC);
 CREATE INDEX IF NOT EXISTS idx_signal_status ON signal(status);
+CREATE INDEX IF NOT EXISTS idx_signal_enrichment_signal_time ON signal_enrichment(signal_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_github_repo_snapshot_repo_time ON github_repo_snapshot(repo_id, captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_learning_task_status ON learning_task(status);
 CREATE INDEX IF NOT EXISTS idx_task_event_task_time ON task_event(task_id, created_at DESC);

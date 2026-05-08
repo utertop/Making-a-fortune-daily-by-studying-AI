@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from apps.api.app.collectors.rss import _score_entry
 from apps.api.app.document_quality import evaluate_markdown_quality
+from apps.api.app.llm.enrichment import enrich_signal
+from apps.api.app.llm.schemas import validate_signal_enrichment
 from apps.api.app.push.feishu import build_today_task_text
 from apps.api.app.scoring import score_github_repo
 from scripts.local_scheduler import build_deadline_text
@@ -181,6 +183,87 @@ def test_markdown_quality_accepts_content_without_file() -> None:
 
     assert quality["status"] == "pass"
     assert quality["metrics"]["link_count"] >= 2
+
+
+def test_llm_enrichment_validation_clamps_to_fixed_taxonomy() -> None:
+    enriched = validate_signal_enrichment(
+        {
+            "ai_category": "Coding Agent",
+            "project_type": "Library",
+            "relevance": "HIGH",
+            "priority": "must_read",
+            "llm_score": 140,
+            "reason": "  Useful for agent workflow observation.  ",
+            "risk": None,
+            "suggested_action": "Deep dive",
+        }
+    )
+
+    assert enriched["ai_category"] == "coding-agent"
+    assert enriched["project_type"] == "library"
+    assert enriched["relevance"] == "high"
+    assert enriched["priority"] == "must_read"
+    assert enriched["llm_score"] == 100.0
+    assert enriched["reason"] == "Useful for agent workflow observation."
+
+
+def test_llm_enrichment_uses_cache_boundary_and_structured_output(monkeypatch) -> None:
+    stored: dict[str, object] = {}
+
+    monkeypatch.setattr("apps.api.app.llm.enrichment.find_signal_enrichment_by_hash", lambda *_args: None)
+    monkeypatch.setattr(
+        "apps.api.app.llm.enrichment.upsert_signal_enrichment",
+        lambda value: stored.setdefault("value", value) and 42,
+    )
+
+    result = enrich_signal(
+        {
+            "id": 7,
+            "title": "example/agent-lab",
+            "url": "https://github.com/example/agent-lab",
+            "source_type": "github_repo",
+            "summary": "AI agent workflow framework",
+            "signal_score": 72,
+            "raw_content": '{"stars_delta_7d":1200,"language":"Python"}',
+        },
+        completion_fn=lambda _messages: {
+            "ai_category": "coding-agent",
+            "project_type": "framework",
+            "relevance": "high",
+            "priority": "must_read",
+            "llm_score": 88,
+            "reason": "Good agent workflow signal.",
+            "risk": "Check maintenance activity.",
+            "suggested_action": "Deep dive.",
+        },
+        model="test-model",
+    )
+
+    assert result["id"] == 42
+    assert result["priority"] == "must_read"
+    assert stored["value"]["signal_id"] == 7
+    assert stored["value"]["input_hash"]
+
+
+def test_feishu_digest_prefers_llm_reason_when_available() -> None:
+    text = build_today_task_text(
+        [
+            {
+                "title": "example/agent-lab",
+                "url": "https://github.com/example/agent-lab",
+                "source_type": "github_repo",
+                "signal_score": 80,
+                "raw_content": '{"language":"Python","newly_seen":true}',
+                "llm_ai_category": "coding-agent",
+                "llm_project_type": "framework",
+                "llm_priority": "must_read",
+                "llm_reason": "Good agent workflow signal.",
+            }
+        ]
+    )
+
+    assert "AI: Good agent workflow signal." in text
+    assert "coding-agent / framework / must_read" in text
 
 
 def test_deadline_report_summarizes_daily_closure_and_tracking_days() -> None:

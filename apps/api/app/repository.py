@@ -252,6 +252,7 @@ def count_rows(table: str) -> int:
         "github_repo_snapshot",
         "collector_run",
         "signal",
+        "signal_enrichment",
         "learning_task",
         "knowledge_document",
         "task_event",
@@ -463,6 +464,118 @@ def list_top_signals(limit: int = 10) -> list[dict[str, Any]]:
         return [dict(row) for row in rows]
 
 
+ENRICHMENT_SELECT_SQL = """
+    select
+        id,
+        signal_id,
+        provider,
+        model,
+        input_hash,
+        ai_category,
+        project_type,
+        relevance,
+        priority,
+        llm_score,
+        reason,
+        risk,
+        suggested_action,
+        raw_json,
+        created_at
+    from signal_enrichment
+"""
+
+
+def list_signal_enrichment_candidates(limit: int = 20) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(limit, 50))
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            select
+                s.id,
+                s.title,
+                s.url,
+                s.source_type,
+                s.summary,
+                s.published_at,
+                s.fetched_at,
+                s.signal_score,
+                s.status,
+                s.raw_content
+            from signal s
+            where s.status = 'discovered'
+            order by s.signal_score desc, s.fetched_at desc, s.id desc
+            limit ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def find_signal_enrichment_by_hash(signal_id: int, input_hash: str) -> dict[str, Any] | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            f"""
+            {ENRICHMENT_SELECT_SQL}
+            where signal_id = ? and input_hash = ?
+            order by id desc
+            limit 1
+            """,
+            (signal_id, input_hash),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_signal_enrichment(enrichment: dict[str, Any]) -> int:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            insert into signal_enrichment (
+                signal_id, provider, model, input_hash, ai_category, project_type,
+                relevance, priority, llm_score, reason, risk, suggested_action, raw_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict(signal_id, input_hash) do update set
+                provider = excluded.provider,
+                model = excluded.model,
+                ai_category = excluded.ai_category,
+                project_type = excluded.project_type,
+                relevance = excluded.relevance,
+                priority = excluded.priority,
+                llm_score = excluded.llm_score,
+                reason = excluded.reason,
+                risk = excluded.risk,
+                suggested_action = excluded.suggested_action,
+                raw_json = excluded.raw_json,
+                created_at = CURRENT_TIMESTAMP
+            """,
+            (
+                enrichment["signal_id"],
+                enrichment["provider"],
+                enrichment["model"],
+                enrichment["input_hash"],
+                enrichment.get("ai_category"),
+                enrichment.get("project_type"),
+                enrichment.get("relevance"),
+                enrichment.get("priority"),
+                enrichment.get("llm_score"),
+                enrichment.get("reason"),
+                enrichment.get("risk"),
+                enrichment.get("suggested_action"),
+                enrichment.get("raw_json"),
+            ),
+        )
+        row = connection.execute(
+            """
+            select id
+            from signal_enrichment
+            where signal_id = ? and input_hash = ?
+            order by id desc
+            limit 1
+            """,
+            (enrichment["signal_id"], enrichment["input_hash"]),
+        ).fetchone()
+        return int(row["id"])
+
+
 def list_signal_digest_candidates(github_limit: int = 30, source_limit: int = 10) -> list[dict[str, Any]]:
     with get_connection() as connection:
         github_rows = connection.execute(
@@ -484,12 +597,25 @@ def list_signal_digest_candidates(github_limit: int = 30, source_limit: int = 10
                 latest_task.updated_at as task_updated_at,
                 latest_task.doc_submitted_at as task_doc_submitted_at,
                 latest_task.archived_at as task_archived_at,
-                latest_task.ignored_reason as task_ignored_reason
+                latest_task.ignored_reason as task_ignored_reason,
+                latest_enrichment.ai_category as llm_ai_category,
+                latest_enrichment.project_type as llm_project_type,
+                latest_enrichment.relevance as llm_relevance,
+                latest_enrichment.priority as llm_priority,
+                latest_enrichment.llm_score as llm_score,
+                latest_enrichment.reason as llm_reason,
+                latest_enrichment.risk as llm_risk,
+                latest_enrichment.suggested_action as llm_suggested_action
             from signal s
             left join learning_task latest_task on latest_task.id = (
                 select max(t2.id)
                 from learning_task t2
                 where t2.signal_id = s.id
+            )
+            left join signal_enrichment latest_enrichment on latest_enrichment.id = (
+                select max(e2.id)
+                from signal_enrichment e2
+                where e2.signal_id = s.id
             )
             where s.status = 'discovered' and s.source_type = 'github_repo'
             order by s.signal_score desc, s.fetched_at desc, s.id desc
@@ -516,12 +642,25 @@ def list_signal_digest_candidates(github_limit: int = 30, source_limit: int = 10
                 latest_task.updated_at as task_updated_at,
                 latest_task.doc_submitted_at as task_doc_submitted_at,
                 latest_task.archived_at as task_archived_at,
-                latest_task.ignored_reason as task_ignored_reason
+                latest_task.ignored_reason as task_ignored_reason,
+                latest_enrichment.ai_category as llm_ai_category,
+                latest_enrichment.project_type as llm_project_type,
+                latest_enrichment.relevance as llm_relevance,
+                latest_enrichment.priority as llm_priority,
+                latest_enrichment.llm_score as llm_score,
+                latest_enrichment.reason as llm_reason,
+                latest_enrichment.risk as llm_risk,
+                latest_enrichment.suggested_action as llm_suggested_action
             from signal s
             left join learning_task latest_task on latest_task.id = (
                 select max(t2.id)
                 from learning_task t2
                 where t2.signal_id = s.id
+            )
+            left join signal_enrichment latest_enrichment on latest_enrichment.id = (
+                select max(e2.id)
+                from signal_enrichment e2
+                where e2.signal_id = s.id
             )
             where s.status = 'discovered' and coalesce(s.source_type, '') != 'github_repo'
             order by coalesce(s.published_at, s.fetched_at) desc, s.signal_score desc, s.id desc

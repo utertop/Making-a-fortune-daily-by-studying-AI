@@ -111,6 +111,16 @@ def _tracking_days(signal: dict[str, Any]) -> int | None:
 
 
 def _compact_reason(signal: dict[str, Any]) -> str:
+    llm_reason = str(signal.get("llm_reason") or "").strip()
+    if llm_reason:
+        labels = [
+            str(signal.get("llm_ai_category") or "").strip(),
+            str(signal.get("llm_project_type") or "").strip(),
+            str(signal.get("llm_priority") or "").strip(),
+        ]
+        label_text = " / ".join(label for label in labels if label)
+        return f"AI: {llm_reason}" + (f" ({label_text})" if label_text else "")
+
     details = _raw_details(signal)
     reasons: list[str] = []
 

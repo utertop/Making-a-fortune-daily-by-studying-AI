@@ -13,6 +13,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 REQUIRED_TABLES = (
     "source",
     "signal",
+    "signal_enrichment",
     "entity",
     "github_repo",
     "github_repo_snapshot",
@@ -96,6 +97,32 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_event_task_time ON task_event(task_id, created_at DESC)"
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS signal_enrichment (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            signal_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            input_hash TEXT NOT NULL,
+            ai_category TEXT,
+            project_type TEXT,
+            relevance TEXT,
+            priority TEXT,
+            llm_score REAL,
+            reason TEXT,
+            risk TEXT,
+            suggested_action TEXT,
+            raw_json TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(signal_id) REFERENCES signal(id),
+            UNIQUE(signal_id, input_hash)
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_signal_enrichment_signal_time ON signal_enrichment(signal_id, created_at DESC)"
     )
     _migrate_legacy_deep_dossier_records(connection)
 
