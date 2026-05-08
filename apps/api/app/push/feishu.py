@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -85,6 +86,30 @@ def _status_label(status: str | None) -> str:
     return labels.get(status or "", status or "未建任务")
 
 
+def _parse_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(normalized.replace(" ", "T"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _tracking_days(signal: dict[str, Any]) -> int | None:
+    started_at = _parse_datetime(signal.get("task_created_at") or signal.get("task_updated_at"))
+    if started_at is None:
+        return None
+    today = datetime.now(timezone.utc).date()
+    return max(1, (today - started_at.astimezone(timezone.utc).date()).days + 1)
+
+
 def _compact_reason(signal: dict[str, Any]) -> str:
     details = _raw_details(signal)
     reasons: list[str] = []
@@ -133,6 +158,9 @@ def _format_signal_line(index: int, signal: dict[str, Any], *, include_status: b
             suffix_parts.append(str(details["language"]))
     if include_status:
         suffix_parts.append(_status_label(_task_status(signal)))
+        tracking_days = _tracking_days(signal)
+        if tracking_days:
+            suffix_parts.append(f"已追踪 {tracking_days} 天")
 
     suffix = f" ({' / '.join(suffix_parts)})" if suffix_parts else ""
     return [

@@ -14,6 +14,7 @@ jobs:
     env:
       PYTHONIOENCODING: utf-8
       PYTHONUTF8: "1"
+      AI_SIGNAL_RADAR_DATABASE_PATH: ${{ github.workspace }}\data\ci-test.db
 
     steps:
       - name: Checkout
@@ -33,6 +34,9 @@ jobs:
 
       - name: Compile Python modules
         run: python -m compileall apps/api scripts
+
+      - name: Run Python tests
+        run: python -m pytest
 
       - name: Smoke test SQLite repository
         run: python scripts/smoke_db.py

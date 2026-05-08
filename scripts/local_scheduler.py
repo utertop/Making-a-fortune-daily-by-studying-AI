@@ -219,6 +219,88 @@ def build_deadline_text(*, kind: str, tasks: list[dict[str, Any]]) -> str | None
     return "\n".join(lines)
 
 
+def parse_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        try:
+            parsed = datetime.fromisoformat(normalized.replace(" ", "T"))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def tracking_days(task: dict[str, Any], current: datetime) -> int:
+    started_at = parse_datetime(
+        task.get("selected_at")
+        or task.get("started_at")
+        or task.get("created_at")
+        or task.get("updated_at")
+    )
+    if started_at is None:
+        return 1
+    return max(1, (current.date() - started_at.astimezone(SHANGHAI_TZ).date()).days + 1)
+
+
+def status_label(status: str) -> str:
+    labels = {
+        "pending": "待处理",
+        "pushed": "已推送",
+        "selected": "已选择",
+        "draft_created": "草稿已生成",
+        "review_pending": "待审核",
+        "documented": "已归档",
+        "archived": "已收起",
+        "ignored": "已跳过",
+    }
+    return labels.get(status, status)
+
+
+def build_deadline_text(*, kind: str, tasks: list[dict[str, Any]], current: datetime | None = None) -> str | None:
+    current = current or now_shanghai()
+    groups = categorize_tasks(tasks)
+    if not groups["follow_up"] and not groups["undecided"]:
+        return None
+
+    title = "今日 AI 学习日报（soft deadline）" if kind == "soft" else "今日 AI 学习日报（hard deadline）"
+    lines = [
+        title,
+        "",
+        f"已完成：{len(groups['done'])}",
+        f"待深挖 / 待归档：{len(groups['follow_up'])}",
+        f"待选择：{len(groups['undecided'])}",
+    ]
+
+    if groups["follow_up"]:
+        lines.extend(["", "待深挖 / 待归档追踪："])
+        for task in groups["follow_up"]:
+            lines.append(
+                f"- [{status_label(task['status'])}] {task['title']} "
+                f"(已追踪 {tracking_days(task, current)} 天)"
+            )
+
+    if groups["undecided"]:
+        lines.extend(["", "仍待选择："])
+        for task in groups["undecided"]:
+            lines.append(
+                f"- [{status_label(task['status'])}] {task['title']} "
+                f"(已追踪 {tracking_days(task, current)} 天)"
+            )
+
+    lines.extend(["", "入口：", WORKSPACE_URL])
+    if kind == "soft":
+        lines.extend(["", "23:00 前建议至少确认或跳过 1 个未完成项目。"])
+    else:
+        lines.extend(["", "未完成项目会进入明日 carry over，继续提醒直到闭环。"])
+
+    return "\n".join(lines)
+
+
 def unresolved_carryover_lines(state: dict[str, Any], current: datetime) -> list[str]:
     carryover = state.get("carryover")
     if not carryover:
@@ -240,7 +322,10 @@ def unresolved_carryover_lines(state: dict[str, Any], current: datetime) -> list
         state["carryover"] = None
         return []
 
-    return [f"- [{status_label(task['status'])}] {task['title']}" for task in unresolved]
+    return [
+        f"- [{status_label(task['status'])}] {task['title']} (已追踪 {tracking_days(task, current)} 天)"
+        for task in unresolved
+    ]
 
 
 def update_carryover_after_morning(state: dict[str, Any], current: datetime) -> None:

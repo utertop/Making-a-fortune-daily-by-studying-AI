@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .db import get_connection, init_database
+from .document_quality import evaluate_markdown_quality
 from .markdown_drafts import resolve_knowledge_path
 
 TASK_STATUSES = {
@@ -479,6 +480,7 @@ def list_signal_digest_candidates(github_limit: int = 30, source_limit: int = 10
                 s.raw_content,
                 latest_task.id as task_id,
                 latest_task.status as task_status,
+                latest_task.created_at as task_created_at,
                 latest_task.updated_at as task_updated_at,
                 latest_task.doc_submitted_at as task_doc_submitted_at,
                 latest_task.archived_at as task_archived_at,
@@ -510,6 +512,7 @@ def list_signal_digest_candidates(github_limit: int = 30, source_limit: int = 10
                 s.raw_content,
                 latest_task.id as task_id,
                 latest_task.status as task_status,
+                latest_task.created_at as task_created_at,
                 latest_task.updated_at as task_updated_at,
                 latest_task.doc_submitted_at as task_doc_submitted_at,
                 latest_task.archived_at as task_archived_at,
@@ -889,6 +892,15 @@ def submit_knowledge_document_for_task(
     if not clean_path:
         raise ValueError("Document path is required")
 
+    quality_content = content
+    if quality_content is None:
+        try:
+            resolved_path = resolve_knowledge_path(clean_path)
+            if resolved_path.exists():
+                quality_content = resolved_path.read_text(encoding="utf-8")
+        except ValueError:
+            quality_content = None
+
     with get_connection() as connection:
         task = connection.execute(
             """
@@ -937,6 +949,7 @@ def submit_knowledge_document_for_task(
         )
 
         previous_status = task["status"]
+        quality = evaluate_markdown_quality(quality_content, source_url=task["source_url"])
         connection.execute(
             """
             update learning_task
@@ -960,9 +973,12 @@ def submit_knowledge_document_for_task(
                 "path": clean_path,
                 "confidence": confidence,
                 "created_by_agent": created_by_agent,
+                "document_quality": quality,
             },
         )
-        return _fetch_task_row(connection, task_id)
+        result = _fetch_task_row(connection, task_id)
+        result["document_quality"] = quality
+        return result
 
 
 def detect_document_for_task(task_id: int) -> dict[str, Any]:
