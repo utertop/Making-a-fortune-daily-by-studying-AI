@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from typing import Any
 
@@ -43,6 +43,17 @@ def _snapshot_record(repo: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _query_with_date_placeholders(query: str) -> str:
+    today = datetime.now(timezone.utc).date()
+    return query.format(
+        today=today.isoformat(),
+        date_1d=(today - timedelta(days=1)).isoformat(),
+        date_7d=(today - timedelta(days=7)).isoformat(),
+        date_14d=(today - timedelta(days=14)).isoformat(),
+        date_30d=(today - timedelta(days=30)).isoformat(),
+    )
+
+
 def collect_github_search_source(source: dict[str, Any], per_page: int = 20) -> dict[str, Any]:
     validate_allowlisted_url(source["url"], source.get("allowlist_domain"))
     source_id = upsert_source(source)
@@ -63,8 +74,9 @@ def collect_github_search_source(source: dict[str, Any], per_page: int = 20) -> 
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
+        query = _query_with_date_placeholders(source.get("query", "AI agent"))
         params = {
-            "q": source.get("query", "AI agent"),
+            "q": query,
             "sort": source.get("sort", "stars"),
             "order": source.get("order", "desc"),
             "per_page": min(int(source.get("per_page", per_page)), 50),

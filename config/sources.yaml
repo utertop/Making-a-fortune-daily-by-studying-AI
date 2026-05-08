@@ -2,7 +2,7 @@
 # Keep official or trusted URLs only. Do not add short links or unknown mirrors.
 
 sources:
-  - name: GitHub AI Search
+  - name: GitHub AI Recent Activity
     type: github_search
     url: https://api.github.com/search/repositories
     priority: high
@@ -14,10 +14,44 @@ sources:
       - open-source
     poll_interval_minutes: 1440
     allowlist_domain: api.github.com
+    sort: updated
+    order: desc
+    per_page: 20
+    query: 'AI agent in:name,description,readme pushed:>{date_7d} stars:>50'
+
+  - name: GitHub AI Newly Created
+    type: github_search
+    url: https://api.github.com/search/repositories
+    priority: high
+    enabled: true
+    official: true
+    tags:
+      - github
+      - ai
+      - new-repo
+    poll_interval_minutes: 1440
+    allowlist_domain: api.github.com
     sort: stars
     order: desc
     per_page: 20
-    query: 'AI agent in:name,description,readme stars:>50'
+    query: 'AI agent in:name,description,readme created:>{date_30d} stars:>20'
+
+  - name: GitHub AI Momentum
+    type: github_search
+    url: https://api.github.com/search/repositories
+    priority: high
+    enabled: true
+    official: true
+    tags:
+      - github
+      - ai
+      - momentum
+    poll_interval_minutes: 1440
+    allowlist_domain: api.github.com
+    sort: stars
+    order: desc
+    per_page: 20
+    query: 'AI agent in:name,description,readme pushed:>{date_30d} stars:>200'
 
   - name: OpenAI News
     type: rss

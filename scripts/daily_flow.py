@@ -15,8 +15,8 @@ from apps.api.app.push.feishu import build_today_task_text, send_feishu_text
 from apps.api.app.repository import (
     count_rows,
     ensure_today_tasks_from_top_signals,
+    list_signal_digest_candidates,
     list_github_repo_scoring_inputs,
-    list_top_signals,
     today_task_summary,
     upsert_signal,
 )
@@ -80,7 +80,7 @@ def score_github(limit: int) -> dict:
                 "raw_content": json.dumps(item, ensure_ascii=False),
                 "summary": item.get("description"),
                 "signal_score": item["score"],
-                "velocity_score": min(max(item["stars_delta"], 0), 25),
+                "velocity_score": min(max(item.get("stars_delta_24h") or item.get("stars_delta_7d") or 0, 0), 25),
                 "relevance_score": 15 if any("ai_keyword_match" in reason for reason in item["reasons"]) else 0,
                 "actionability_score": 5 if item.get("license") and item.get("license") != "NOASSERTION" else 0,
                 "status": "discovered",
@@ -99,7 +99,7 @@ def prepare_today_tasks(limit: int) -> dict:
 
 
 def push_today(limit: int, send: bool) -> dict:
-    signals = list_top_signals(limit=limit)
+    signals = list_signal_digest_candidates(github_limit=max(limit * 3, 30), source_limit=10)
     text = build_today_task_text(signals)
     if not send:
         return {"dry_run": True, "signal_count": len(signals), "text": text}

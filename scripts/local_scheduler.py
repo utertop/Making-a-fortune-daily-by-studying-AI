@@ -14,12 +14,12 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from apps.api.app.db import init_database
-from apps.api.app.push.feishu import send_feishu_text
+from apps.api.app.push.feishu import build_today_task_text, send_feishu_text
 from apps.api.app.repository import (
     ensure_learning_task_for_signal,
     get_learning_tasks_by_ids,
+    list_signal_digest_candidates,
     list_today_tasks,
-    list_top_signals,
     update_learning_task_status,
 )
 from daily_flow import collect_github, collect_rss, prepare_today_tasks, score_github
@@ -286,13 +286,14 @@ def should_record_run(result: dict[str, Any]) -> bool:
 def run_signal_push_job(job_name: str, state: dict[str, Any], current: datetime, preview: bool) -> dict[str, Any]:
     limit = limit_for_job(job_name, current)
     run_collection_pipeline(limit=limit)
-    signals = list_top_signals(limit=limit)
-    ensure_top_signal_tasks_pushed(signals)
+    signals = list_signal_digest_candidates(github_limit=max(limit * 3, 30), source_limit=10)
+    if not preview:
+        ensure_top_signal_tasks_pushed(signals[:limit])
 
     title = "今日 AI 信号早报（08:00）" if job_name == MORNING_JOB else "今日 AI 信号补充推送（14:00）"
     subtitle = f"{'周末' if is_weekend(current) else '工作日'} Top {limit}"
     carryover_lines = unresolved_carryover_lines(state, current) if job_name == MORNING_JOB else []
-    text = build_signal_digest_text(
+    text = build_today_task_text(
         title=title,
         subtitle=subtitle,
         signals=signals,

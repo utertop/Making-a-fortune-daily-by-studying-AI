@@ -282,6 +282,7 @@ def upsert_signal(signal: dict[str, Any]) -> tuple[int, bool]:
                 raw_content = excluded.raw_content,
                 summary = excluded.summary,
                 published_at = excluded.published_at,
+                fetched_at = coalesce(excluded.fetched_at, CURRENT_TIMESTAMP),
                 signal_score = excluded.signal_score,
                 freshness_score = excluded.freshness_score,
                 velocity_score = excluded.velocity_score,
@@ -393,10 +394,54 @@ def list_github_repo_scoring_inputs() -> list[dict[str, Any]]:
                 first_snapshot.forks as first_forks,
                 first_snapshot.captured_at as first_captured_at,
                 latest_snapshot.stars - first_snapshot.stars as stars_delta,
-                latest_snapshot.forks - first_snapshot.forks as forks_delta
+                latest_snapshot.forks - first_snapshot.forks as forks_delta,
+                case
+                    when snapshot_24h.id is not null then latest_snapshot.stars - snapshot_24h.stars
+                    else 0
+                end as stars_delta_24h,
+                case
+                    when snapshot_24h.id is not null then latest_snapshot.forks - snapshot_24h.forks
+                    else 0
+                end as forks_delta_24h,
+                case
+                    when snapshot_7d.id is not null then latest_snapshot.stars - snapshot_7d.stars
+                    else 0
+                end as stars_delta_7d,
+                case
+                    when snapshot_7d.id is not null then latest_snapshot.forks - snapshot_7d.forks
+                    else 0
+                end as forks_delta_7d,
+                case
+                    when julianday(latest_snapshot.captured_at) - julianday(first_snapshot.captured_at) <= 2
+                    then 1
+                    else 0
+                end as newly_seen,
+                latest_task.status as latest_task_status
             from github_repo r
             join first_snapshot on first_snapshot.repo_id = r.id
             join latest_snapshot on latest_snapshot.repo_id = r.id
+            left join github_repo_snapshot snapshot_24h on snapshot_24h.id = (
+                select max(s2.id)
+                from github_repo_snapshot s2
+                where
+                    s2.repo_id = r.id
+                    and julianday(s2.captured_at) <= julianday(latest_snapshot.captured_at) - 1
+                    and julianday(s2.captured_at) >= julianday(latest_snapshot.captured_at) - 2
+            )
+            left join github_repo_snapshot snapshot_7d on snapshot_7d.id = (
+                select max(s2.id)
+                from github_repo_snapshot s2
+                where
+                    s2.repo_id = r.id
+                    and julianday(s2.captured_at) <= julianday(latest_snapshot.captured_at) - 7
+                    and julianday(s2.captured_at) >= julianday(latest_snapshot.captured_at) - 10
+            )
+            left join signal gs on gs.url = r.url
+            left join learning_task latest_task on latest_task.id = (
+                select max(t2.id)
+                from learning_task t2
+                where t2.signal_id = gs.id
+            )
             """
         ).fetchall()
         return [dict(row) for row in rows]
@@ -415,6 +460,83 @@ def list_top_signals(limit: int = 10) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def list_signal_digest_candidates(github_limit: int = 30, source_limit: int = 10) -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        github_rows = connection.execute(
+            """
+            select
+                s.id,
+                s.title,
+                s.url,
+                s.source_type,
+                s.summary,
+                s.published_at,
+                s.fetched_at,
+                s.signal_score,
+                s.status,
+                s.raw_content,
+                latest_task.id as task_id,
+                latest_task.status as task_status,
+                latest_task.updated_at as task_updated_at,
+                latest_task.doc_submitted_at as task_doc_submitted_at,
+                latest_task.archived_at as task_archived_at,
+                latest_task.ignored_reason as task_ignored_reason
+            from signal s
+            left join learning_task latest_task on latest_task.id = (
+                select max(t2.id)
+                from learning_task t2
+                where t2.signal_id = s.id
+            )
+            where s.status = 'discovered' and s.source_type = 'github_repo'
+            order by s.signal_score desc, s.fetched_at desc, s.id desc
+            limit ?
+            """,
+            (max(1, min(github_limit, 100)),),
+        ).fetchall()
+        source_rows = connection.execute(
+            """
+            select
+                s.id,
+                s.title,
+                s.url,
+                s.source_type,
+                s.summary,
+                s.published_at,
+                s.fetched_at,
+                s.signal_score,
+                s.status,
+                s.raw_content,
+                latest_task.id as task_id,
+                latest_task.status as task_status,
+                latest_task.updated_at as task_updated_at,
+                latest_task.doc_submitted_at as task_doc_submitted_at,
+                latest_task.archived_at as task_archived_at,
+                latest_task.ignored_reason as task_ignored_reason
+            from signal s
+            left join learning_task latest_task on latest_task.id = (
+                select max(t2.id)
+                from learning_task t2
+                where t2.signal_id = s.id
+            )
+            where s.status = 'discovered' and coalesce(s.source_type, '') != 'github_repo'
+            order by coalesce(s.published_at, s.fetched_at) desc, s.signal_score desc, s.id desc
+            limit ?
+            """,
+            (max(1, min(source_limit, 50)),),
+        ).fetchall()
+
+    candidates: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for row in [*github_rows, *source_rows]:
+        item = dict(row)
+        url = str(item.get("url") or "")
+        if url in seen_urls:
+            continue
+        candidates.append(item)
+        seen_urls.add(url)
+    return candidates
 
 
 def ensure_learning_task_for_signal(signal_id: int) -> int:

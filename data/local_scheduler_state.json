@@ -1,7 +1,23 @@
 {
   "last_run": {
-    "soft_deadline": "2026-04-25",
-    "login_catchup": "2026-04-25"
+    "soft_deadline": "2026-05-07",
+    "login_catchup": "2026-04-25",
+    "hard_deadline": "2026-05-07",
+    "morning_push": "2026-05-08",
+    "afternoon_push": "2026-04-26"
   },
-  "carryover": null
+  "carryover": {
+    "source_date": "2026-05-07",
+    "task_ids": [
+      12,
+      11,
+      1,
+      7,
+      6,
+      5,
+      8,
+      9
+    ],
+    "reminded_at": "2026-05-08T08:00:02.117921+08:00"
+  }
 }

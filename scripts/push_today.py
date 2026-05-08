@@ -8,11 +8,11 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from apps.api.app.db import init_database
 from apps.api.app.push.feishu import build_today_task_text, send_feishu_text
-from apps.api.app.repository import list_top_signals
+from apps.api.app.repository import list_signal_digest_candidates
 
 
 def emit(value: object) -> None:
-    print(json.dumps(value, ensure_ascii=True, default=str))
+    print(json.dumps(value, ensure_ascii=False, default=str))
 
 
 def main() -> None:
@@ -22,7 +22,7 @@ def main() -> None:
     args = parser.parse_args()
 
     init_database()
-    signals = list_top_signals(limit=args.limit)
+    signals = list_signal_digest_candidates(github_limit=max(args.limit * 3, 30), source_limit=10)
     text = build_today_task_text(signals)
     if not args.send:
         emit({"dry_run": True, "text": text})

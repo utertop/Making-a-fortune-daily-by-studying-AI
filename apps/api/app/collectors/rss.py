@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
@@ -8,6 +9,35 @@ import feedparser
 
 from ..repository import create_collector_run, upsert_signal, upsert_source
 from ..sources import validate_allowlisted_url
+
+HIGH_VALUE_KEYWORDS = {
+    "agent": 8,
+    "agentic": 8,
+    "codex": 8,
+    "model": 6,
+    "models": 6,
+    "eval": 6,
+    "evaluation": 6,
+    "benchmark": 6,
+    "inference": 6,
+    "open source": 5,
+    "github copilot": 5,
+    "rag": 5,
+    "mcp": 5,
+    "workflow": 4,
+    "automation": 4,
+    "release": 4,
+    "api": 3,
+}
+
+LOW_VALUE_KEYWORDS = {
+    "customer story": -5,
+    "case study": -4,
+    "partner": -3,
+    "event": -3,
+    "webinar": -3,
+    "announcement": -2,
+}
 
 
 def _entry_published(entry: Any) -> str | None:
@@ -25,6 +55,41 @@ def _entry_summary(entry: Any) -> str | None:
     if description:
         return str(description)
     return None
+
+
+def _score_entry(source: dict[str, Any], title: str, summary: str | None) -> dict[str, Any]:
+    text = f"{title}\n{summary or ''}".lower()
+    score = 8
+    reasons: list[str] = []
+    risks: list[str] = []
+
+    if source.get("official"):
+        score += 8
+        reasons.append("official_source: +8")
+
+    for keyword, value in HIGH_VALUE_KEYWORDS.items():
+        if keyword in text:
+            score += value
+            reasons.append(f"{keyword}: +{value}")
+
+    for keyword, value in LOW_VALUE_KEYWORDS.items():
+        if keyword in text:
+            score += value
+            risks.append(f"{keyword}: {value}")
+
+    if len(text.strip()) < 120:
+        score -= 3
+        risks.append("thin_summary: -3")
+
+    if not reasons:
+        score -= 5
+        risks.append("weak_ai_relevance: -5")
+
+    return {
+        "score": max(0, score),
+        "reasons": reasons,
+        "risks": risks,
+    }
 
 
 def collect_rss_source(source: dict[str, Any], max_entries: int = 20) -> dict[str, Any]:
@@ -51,19 +116,28 @@ def collect_rss_source(source: dict[str, Any], max_entries: int = 20) -> dict[st
             title = getattr(entry, "title", None)
             if not link or not title:
                 continue
+            summary = _entry_summary(entry)
+            scoring = _score_entry(source, str(title), summary)
             _, created = upsert_signal(
                 {
                     "title": str(title),
                     "url": str(link),
                     "source_id": source_id,
                     "source_type": source["type"],
-                    "raw_content": _entry_summary(entry),
-                    "summary": _entry_summary(entry),
+                    "raw_content": json.dumps(
+                        {
+                            "source_name": source["name"],
+                            "reasons": scoring["reasons"],
+                            "risks": scoring["risks"],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "summary": summary,
                     "published_at": _entry_published(entry),
                     "authority_score": 10 if source.get("official") else 0,
-                    "relevance_score": 5,
+                    "relevance_score": max(0, scoring["score"] - 8),
                     "actionability_score": 2,
-                    "signal_score": 17 if source.get("official") else 7,
+                    "signal_score": scoring["score"],
                     "status": "discovered",
                 }
             )

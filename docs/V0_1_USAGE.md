@@ -1,129 +1,59 @@
-# v0.1 使用说明
+# AI Signal Radar v0.1 使用指南
 
-本文档说明当前 v0.1 阶段已经可以怎么用、怎么验证、哪些能力仍然是半自动。
+v0.1 是一个本地优先的 AI 信号雷达工作流。它负责从 GitHub / RSS 发现候选信号，给信号打分，把今日任务推送到飞书，并在 Web 工作台里帮助你把少量高价值项目沉淀成 Markdown 知识档案。
 
-## 当前定位
+## 1. 启动前检查
 
-v0.1 是一个本地优先的 AI 信号雷达和学习工作台。
-
-它现在主要完成四件事：
-
-1. 采集 GitHub / RSS 等公开信号。
-2. 对 AI 相关项目做本地评分和排序。
-3. 通过飞书推送今日候选信号。
-4. 在 Web 工作台里跟进任务，并生成 Markdown 知识库草稿。
-
-当前还不是全自动 Agent 系统。v0.1 的默认模式是半自动：系统负责采集、筛选、排序、推送和生成基础草稿；你再用 Codex / Antigravity 补全深度总结和知识库内容。
-
-## 本地地址
-
-启动后访问：
-
-```text
-http://127.0.0.1:3100
-```
-
-本地 API 地址：
-
-```text
-http://127.0.0.1:8000
-```
-
-这两个地址都只在本机服务运行时可用，不是公网部署地址。
-
-如果需要同一局域网内的电脑或手机访问，可以用 LAN 模式启动：
-
-```powershell
-scripts\start_local.cmd --lan
-```
-
-脚本会尝试打印类似这样的地址：
-
-```text
-LAN Web: http://192.168.x.x:3100
-LAN API: http://192.168.x.x:8000
-```
-
-注意：LAN 模式会让同一局域网设备访问你的本地服务，只建议在可信网络里使用。
-从局域网地址打开页面时，Web 会自动把按钮请求切换到同一台主机的 `:8000` API。
-
-## 第一次使用前检查
-
-在项目根目录执行：
+在项目根目录运行：
 
 ```powershell
 scripts\doctor.cmd
 ```
 
-理想结果：
+理想状态是大部分检查通过。`API health` 和 `Web workspace` 在服务未启动时显示 unreachable 是正常的。
 
-```text
-ok: true
-ok_count: 12/12
-```
-
-如果 Web 依赖缺失，执行：
+如果 Web 依赖缺失，运行：
 
 ```powershell
 scripts\install_web_deps.cmd
 ```
 
-如果 API 或 Web 显示 unreachable，通常只是本地服务还没有启动。
+## 2. 启动本地工作台
 
-## 启动 Web 工作台
-
-在项目根目录执行：
+启动 API 和 Web：
 
 ```powershell
 scripts\start_local.cmd
 ```
 
-它会启动两个本地服务：
+默认地址：
 
 ```text
-API: http://127.0.0.1:8000
 Web: http://127.0.0.1:3100
+API: http://127.0.0.1:8000
 ```
 
-然后打开：
-
-```text
-http://127.0.0.1:3100
-```
-
-如果窗口一闪而过，或者页面打不开，重新执行：
-
-```powershell
-scripts\doctor.cmd
-```
-
-并查看 API / Web 两个窗口里的错误信息。
-
-如果希望局域网访问，启动方式改为：
+如果需要局域网访问：
 
 ```powershell
 scripts\start_local.cmd --lan
 ```
 
-如果希望完全不手动启动，需要做 Windows 开机启动、计划任务、桌面应用壳或云端部署。这些都属于 v0.1 之后的增强项；当前项目内已经提供一键启动脚本，但不会主动修改你的系统启动项。
+## 3. 每日流程
 
-## 每日推荐流程
-
-### 1. 运行今日雷达
-
-只预览，不真实推送飞书：
+运行一次完整的本地采集和整理流程：
 
 ```powershell
 scripts\daily_flow.cmd
 ```
 
-真实推送到飞书：
+同时发送飞书推送：
 
 ```powershell
 scripts\daily_flow.cmd --send
 ```
 
-常用参数：
+常用调试参数：
 
 ```powershell
 scripts\daily_flow.cmd --limit 5
@@ -132,153 +62,136 @@ scripts\daily_flow.cmd --skip-github
 scripts\daily_flow.cmd --skip-push
 ```
 
-### 2. 打开 Today Workspace
+## 4. Today Workspace 怎么用
 
-访问：
+打开：
 
 ```text
 http://127.0.0.1:3100
 ```
 
-页面会展示今日候选 AI 信号、评分、star / fork / delta、语言、许可证、触发规则和风险提示。
+推荐节奏：
 
-### 3. 处理今日任务
+1. 查看今日 Top Signals。
+2. 从候选信号里选择 1 到 3 个值得深挖的项目。
+3. 点击 `生成 Markdown 草稿`，让系统创建知识库文件。
+4. 点击 `深挖 Prompt`，复制 Prompt 给 Codex / Antigravity 继续研究。
+5. 编辑生成的 Markdown 文档。
+6. 点击 `检测 Markdown`，让系统识别文件是否已更新。
+7. 确认内容后点击 `确认归档`。
+8. 不值得处理的信号可以选择跳过原因并点击 `跳过`。
 
-推荐顺序：
+## 5. Markdown 保存位置
 
-1. 先看 Top Signals。
-2. 对值得关注的项目点 `选择跟进`。
-3. 对值得写知识库的项目点 `生成 Markdown 草稿`。
-4. 用 Codex / Antigravity 阅读链接、仓库、文档后补全 Markdown。
-5. 回到 Web 页面点 `提交文档`，填写路径、摘要、标签。
-6. 点 `保存文档记录`。
-7. 对不处理的项目点 `忽略`，对已结束跟进的项目点 `归档`。
-
-## Web 按钮说明
-
-| 按钮 | 当前作用 |
-| --- | --- |
-| `标记已推送` | 在本地数据库记录这条任务已经推送过；不会重新发送飞书消息。 |
-| `选择跟进` | 把任务状态改成跟进中。 |
-| `生成 Markdown 草稿` | 在 `knowledge-base/daily/YYYY/MM/YYYY-MM-DD/` 下生成一篇标准 Markdown 草稿，并把任务改为跟进中。 |
-| `提交文档` | 展开文档提交表单。 |
-| `保存文档记录` | 把文档路径、摘要、标签等写入本地数据库，并把任务标记为已文档化。 |
-| `忽略` | 标记这条今天不处理。 |
-| `归档` | 标记为已归档，算作今日已处理。 |
-
-当前页面已经提供操作成功 / 失败提示。生成 Markdown 草稿后会显示文件路径，并提供复制路径按钮。
-
-## 知识库文件在哪里
-
-Markdown 草稿默认写入：
+默认每日知识档案路径：
 
 ```text
 knowledge-base/daily/YYYY/MM/YYYY-MM-DD/
 ```
 
-模板位置：
+项目模板：
 
 ```text
 knowledge-base/templates/project-note.md
 ```
 
-生成草稿后，你可以直接让 Codex / Antigravity 基于该文件继续补全：
+建议每篇项目档案至少包含：
 
-```text
-请阅读这个项目链接和当前 Markdown 草稿，补全背景、核心能力、技术架构、安装使用、适合学习的点、风险和后续跟进建议。
-```
+- 一句话总结
+- 它解决什么问题
+- 为什么值得关注
+- 核心机制
+- 适用场景
+- 限制与风险
+- 相关链接
+- 学习建议
 
-复杂概念后续可以在 Markdown 里用 Mermaid 表达。v0.1 默认先生成 Markdown 文本，后续阶段再支持 Mermaid 渲染成 SVG / PNG。
+## 6. 飞书推送
 
-## 飞书推送说明
-
-飞书 Webhook 配置参考：
+飞书 webhook 配置见：
 
 ```text
 docs/FEISHU_WEBHOOK.md
 ```
 
-v0.1 的推送逻辑：
-
-1. `scripts\daily_flow.cmd` 默认只预览，不发送。
-2. 加 `--send` 才会真实发送飞书。
-3. Web 页面上的 `标记已推送` 只是状态记录，不会调用飞书 Webhook。
-
-如果只想单独测试飞书：
+单独测试今日推送：
 
 ```powershell
 .venv\Scripts\python scripts\push_today.py --limit 5
 ```
 
-真实发送：
+真正发送：
 
 ```powershell
 .venv\Scripts\python scripts\push_today.py --send --limit 5
 ```
 
-## 当前验证方式
+## 7. 常见问题
 
-### 验证本地整体状态
+### API 或 Web unreachable
 
-```powershell
-scripts\doctor.cmd
-```
-
-### 验证每日流程可跑
+先确认是否已经运行：
 
 ```powershell
-scripts\daily_flow.cmd --skip-rss --skip-github --skip-push --limit 3
+scripts\start_local.cmd
 ```
 
-### 验证 Web 页面可打开
+如果只是运行 `doctor` 时看到 unreachable，而你没有启动服务，这是正常状态。
 
-1. 执行 `scripts\start_local.cmd`。
-2. 打开 `http://127.0.0.1:3100`。
-3. 页面能看到 Top Signals 和本地任务状态。
+### Web 依赖检查失败
 
-### 验证 Markdown 草稿生成
+运行：
 
-1. 在 Web 页面点击某个任务的 `生成 Markdown 草稿`。
-2. 检查目录：
-
-```text
-knowledge-base/daily/YYYY/MM/YYYY-MM-DD/
+```powershell
+scripts\install_web_deps.cmd
 ```
 
-3. 应该出现对应 `.md` 文件。
+### 没有今日任务
 
-## 当前已完成能力
+先跑一次：
 
-- 本地 SQLite 数据库初始化。
-- GitHub 搜索源采集。
-- RSS 源采集。
-- GitHub repo snapshot 保存。
-- AI 信号评分和排序。
-- 今日任务生成。
-- 飞书 Webhook 推送。
-- Today Workspace 页面。
-- 本地任务状态系统。
-- Markdown 知识库提交记录。
-- Markdown 草稿生成入口。
-- 一键本地启动脚本。
-- LAN 模式本地启动。
-- 一键本地体检脚本。
-- Web 操作成功 / 失败提示。
-- Markdown 路径展示和复制。
-- 今日时间和归档目录提示。
+```powershell
+scripts\daily_flow.cmd
+```
 
-## 当前限制
+或者确认数据库里已有 signal 数据：
 
-- 暂时没有接入 LLM API Key 自动总结。
-- 暂时不会自动阅读完整 GitHub 仓库、论文或长文档。
-- 飞书推送只支持文本消息。
-- 任务状态保存在本地 SQLite，不是云端同步。
-- GitHub 热度增长目前依赖本地 snapshot，数据越持续跑越有价值。
-- 完全免手动启动需要 Windows 计划任务、桌面应用壳或云端部署，v0.1 暂不主动修改系统启动项。
+```powershell
+.venv\Scripts\python scripts\top_signals.py --limit 5
+```
 
-## 不要提交的内容
+### PowerShell 输出执行策略错误
 
-不要提交：
+如果每次命令前都出现 PowerShell profile 加载失败，通常是本机执行策略阻止了 `Microsoft.PowerShell_profile.ps1`。它不一定影响项目运行，但会污染命令输出。可以后续单独处理 PowerShell profile 或执行策略。
+
+## 8. v0.1 边界
+
+当前版本专注本地闭环，不追求完整平台化能力。
+
+v0.1 已覆盖：
+
+- SQLite 本地数据存储
+- GitHub / RSS 信号采集
+- GitHub repo snapshot
+- 信号评分与 Top Signals
+- 飞书 webhook 推送
+- Today Workspace
+- Markdown 草稿生成
+- Markdown 文件检测
+- 知识文档归档记录
+
+暂不覆盖：
+
+- 多用户权限
+- 云端同步
+- 外部笔记软件自动同步
+- 全自动 LLM 总结
+- 生产级 API key 管理
+- 复杂 Agent 编排
+
+## 9. 安全提醒
+
+不要提交这些内容：
 
 ```text
 .env
@@ -286,30 +199,14 @@ data/local.db
 .venv/
 apps/web/node_modules/
 apps/web/.next/
-真实 Webhook URL
+Webhook URL
 API key
 token
-本地缓存
+本地私密笔记
 ```
 
-安全规则详见：
+安全规则见：
 
 ```text
 docs/SECURITY_RULES.md
 ```
-
-## 下一步建议
-
-v0.1 目前已经可以本地闭环使用。下一步建议进入：
-
-```text
-Phase 13: 自动化运行与部署形态
-```
-
-重点优化：
-
-1. Windows 计划任务或托盘程序，减少手动启动。
-2. 局域网访问权限和防火墙提示。
-3. Vercel / Supabase 云端形态。
-4. API key 接入后的全自动总结。
-5. 知识库文档渲染、搜索和同步到笔记工具。
