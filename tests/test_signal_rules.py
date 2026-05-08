@@ -155,6 +155,34 @@ def test_markdown_quality_flags_template_like_documents() -> None:
     assert good["status"] == "pass"
 
 
+def test_markdown_quality_accepts_content_without_file() -> None:
+    quality = evaluate_markdown_quality(
+        "\n".join(
+            [
+                "# Project",
+                "Source: https://github.com/example/project",
+                "Docs: https://docs.example.com",
+                "## TL;DR",
+                "A useful project note.",
+                "## Problem",
+                "It solves a real workflow problem.",
+                "## Mechanism",
+                "It coordinates tools and model calls.",
+                "## Risks",
+                "It still needs maintenance review.",
+                "## Links",
+                "- https://github.com/example/project",
+                "- https://docs.example.com",
+                "More context " * 90,
+            ]
+        ),
+        source_url="https://github.com/example/project",
+    )
+
+    assert quality["status"] == "pass"
+    assert quality["metrics"]["link_count"] >= 2
+
+
 def test_deadline_report_summarizes_daily_closure_and_tracking_days() -> None:
     text = build_deadline_text(
         kind="hard",

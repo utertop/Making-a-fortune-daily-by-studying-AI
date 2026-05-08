@@ -44,6 +44,7 @@ export type TodayTask = {
   signal_score: number | null;
   source_type: string | null;
   raw_content: string | null;
+  document_quality?: DocumentQuality;
 };
 
 export type TodaySummary = {
@@ -102,6 +103,19 @@ type DocumentDraft = {
   tags: string;
   confidence: string;
   created_by_agent: string;
+};
+
+type DocumentQuality = {
+  status: "pass" | "pass_with_warnings" | "needs_work";
+  score: number;
+  issues: string[];
+  warnings: string[];
+  metrics: {
+    heading_count: number;
+    link_count: number;
+    placeholder_count: number;
+    character_count: number;
+  };
 };
 
 type PromptDraft = {
@@ -369,6 +383,7 @@ export default function TodayWorkspace({
   const [promptPreviewTaskId, setPromptPreviewTaskId] = useState<number | null>(null);
   const [promptDrafts, setPromptDrafts] = useState<Record<number, PromptDraft>>({});
   const [documentDrafts, setDocumentDrafts] = useState<Record<number, DocumentDraft>>({});
+  const [documentQualities, setDocumentQualities] = useState<Record<number, DocumentQuality>>({});
   const [ignoreReasons, setIgnoreReasons] = useState<Record<number, string>>({});
   const [currentTime, setCurrentTime] = useState(new Date());
   const [runtimeApiBaseUrl] = useState(apiBaseUrl);
@@ -560,6 +575,35 @@ export default function TodayWorkspace({
     }
   }
 
+  async function checkDocumentQuality(task: TodayTask) {
+    const draft = documentDrafts[task.id] ?? buildDefaultDocumentDraft(task, archivePath);
+    const path = draft.path || task.target_doc_path || task.document_path;
+    setBusyTaskId(task.id);
+    setError("");
+    try {
+      const response = await fetch(`${runtimeApiBaseUrl}/tasks/${task.id}/quality-check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      if (!response.ok) {
+        throw new Error(await parseApiError(response));
+      }
+
+      const payload = (await response.json()) as { task: TodayTask; document_quality: DocumentQuality };
+      applyTaskUpdate(payload.task);
+      setDocumentQualities((currentQualities) => ({
+        ...currentQualities,
+        [task.id]: payload.document_quality,
+      }));
+      setNotice(`Markdown 质量检查完成：${payload.document_quality.status}，${payload.document_quality.score} 分。`);
+    } catch (qualityError) {
+      setError(qualityError instanceof Error ? qualityError.message : "检查 Markdown 质量失败。");
+    } finally {
+      setBusyTaskId(null);
+    }
+  }
+
   function updateDocumentDraft(taskId: number, patch: Partial<DocumentDraft>) {
     setDocumentDrafts((currentDrafts) => ({
       ...currentDrafts,
@@ -600,6 +644,12 @@ export default function TodayWorkspace({
 
       const payload = (await response.json()) as { task: TodayTask };
       applyTaskUpdate(payload.task);
+      if ("document_quality" in payload.task) {
+        setDocumentQualities((currentQualities) => ({
+          ...currentQualities,
+          [task.id]: payload.task.document_quality as DocumentQuality,
+        }));
+      }
       setDocumentTaskId(null);
       setNotice(`${task.title} 已确认归档。`);
     } catch (submitError) {
@@ -749,6 +799,7 @@ export default function TodayWorkspace({
               const promptDraft = promptDrafts[task.id] ?? buildPromptDraft(task);
               const deepPromptText = buildDeepResearchPrompt(task, promptDraft);
               const draft = documentDrafts[task.id] ?? buildDefaultDocumentDraft(task, archivePath);
+              const documentQuality = documentQualities[task.id] ?? task.document_quality;
               const isBusy = busyTaskId === task.id;
               const isPromptPreviewOpen = promptPreviewTaskId === task.id;
               const canPush = allowedStatusSet.has("pushed") && task.status === "pending";
@@ -757,6 +808,9 @@ export default function TodayWorkspace({
                 task.status === "selected" || task.status === "draft_created" || task.status === "review_pending";
               const canDetect =
                 Boolean(task.target_doc_path) && !["documented", "archived", "ignored"].includes(task.status);
+              const canQualityCheck =
+                Boolean(task.target_doc_path ?? task.document_path ?? draft.path) &&
+                !["archived", "ignored"].includes(task.status);
               const canConfirmDocument =
                 Boolean(task.target_doc_path) && !["documented", "archived", "ignored"].includes(task.status);
               const canPreviewPrompt =
@@ -850,6 +904,21 @@ export default function TodayWorkspace({
                           >
                             复制路径
                           </button>
+                        </div>
+                      ) : null}
+
+                      {documentQuality ? (
+                        <div className={`quality-panel quality-${documentQuality.status}`}>
+                          <div>
+                            <strong>Markdown 质量：{documentQuality.status}</strong>
+                            <span>{documentQuality.score} 分</span>
+                          </div>
+                          {documentQuality.issues.length > 0 ? (
+                            <p>问题：{documentQuality.issues.join(" / ")}</p>
+                          ) : null}
+                          {documentQuality.warnings.length > 0 ? (
+                            <p>提醒：{documentQuality.warnings.join(" / ")}</p>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>
@@ -1041,6 +1110,11 @@ export default function TodayWorkspace({
                       {canDetect ? (
                         <button className="button-secondary" disabled={isBusy} onClick={() => void detectTaskDocument(task)} type="button">
                           检测 Markdown
+                        </button>
+                      ) : null}
+                      {canQualityCheck ? (
+                        <button className="button-secondary" disabled={isBusy} onClick={() => void checkDocumentQuality(task)} type="button">
+                          检查质量
                         </button>
                       ) : null}
                       {canConfirmDocument ? (

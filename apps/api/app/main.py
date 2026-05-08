@@ -11,6 +11,7 @@ from .markdown_drafts import build_project_markdown, default_project_doc_path, w
 from .repository import (
     TASK_STATUSES,
     attach_draft_document_to_task,
+    check_document_quality_for_task,
     detect_document_for_task,
     detect_documents,
     ensure_today_tasks_from_top_signals,
@@ -45,6 +46,11 @@ class MarkdownDraftGenerate(BaseModel):
 
 class DocumentDetectRequest(BaseModel):
     limit: int = Field(default=50, ge=1, le=200)
+
+
+class DocumentQualityCheckRequest(BaseModel):
+    path: Optional[str] = Field(default=None, max_length=500)
+    content: Optional[str] = None
 
 
 app = FastAPI(title="AI Signal Radar API", version="0.1.0")
@@ -161,6 +167,20 @@ def detect_task_document(task_id: int) -> dict:
         result = detect_document_for_task(task_id)
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    return result
+
+
+@app.post("/tasks/{task_id}/quality-check")
+def check_task_document_quality(task_id: int, payload: DocumentQualityCheckRequest) -> dict:
+    ensure_database()
+    try:
+        result = check_document_quality_for_task(
+            task_id=task_id,
+            path=payload.path,
+            content=payload.content,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return result
 
 

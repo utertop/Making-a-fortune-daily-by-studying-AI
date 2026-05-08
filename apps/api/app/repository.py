@@ -9,7 +9,7 @@ from typing import Any
 
 from .db import get_connection, init_database
 from .document_quality import evaluate_markdown_quality
-from .markdown_drafts import resolve_knowledge_path
+from .markdown_drafts import resolve_knowledge_path, to_repo_relative_path
 
 TASK_STATUSES = {
     "pending",
@@ -979,6 +979,45 @@ def submit_knowledge_document_for_task(
         result = _fetch_task_row(connection, task_id)
         result["document_quality"] = quality
         return result
+
+
+def check_document_quality_for_task(task_id: int, path: str | None = None, content: str | None = None) -> dict[str, Any]:
+    with get_connection() as connection:
+        task = connection.execute(
+            """
+            select id, source_url, target_doc_path
+            from learning_task
+            where id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        if task is None:
+            raise ValueError(f"Task not found: {task_id}")
+
+        target_path = path or task["target_doc_path"]
+        quality_content = content
+        resolved_repo_path = target_path
+        if quality_content is None and target_path:
+            resolved_path = resolve_knowledge_path(target_path)
+            resolved_repo_path = to_repo_relative_path(resolved_path)
+            if not resolved_path.exists():
+                raise ValueError(f"Document file not found: {target_path}")
+            quality_content = resolved_path.read_text(encoding="utf-8")
+
+        quality = evaluate_markdown_quality(quality_content, source_url=task["source_url"])
+        _record_task_event(
+            connection,
+            task_id=task_id,
+            event_type="document_quality_checked",
+            payload={
+                "path": resolved_repo_path,
+                "document_quality": quality,
+            },
+        )
+        return {
+            "task": _fetch_task_row(connection, task_id),
+            "document_quality": quality,
+        }
 
 
 def detect_document_for_task(task_id: int) -> dict[str, Any]:

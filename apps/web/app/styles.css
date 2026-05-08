@@ -790,6 +790,54 @@ dd {
   line-height: 1.5;
 }
 
+.quality-panel {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 10px 12px;
+  background: var(--neutral-bg);
+  border: 1px solid var(--neutral-border);
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.quality-panel div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.quality-panel strong {
+  color: var(--text);
+}
+
+.quality-panel span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.quality-panel p {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.quality-pass {
+  background: var(--success-bg);
+  border-color: var(--success-border);
+}
+
+.quality-pass_with_warnings {
+  background: var(--warning-bg);
+  border-color: var(--warning-border);
+}
+
+.quality-needs_work {
+  background: #fff1f2;
+  border-color: #fecdd3;
+}
+
 .doc-path-row button {
   min-height: 30px;
   padding: 6px 9px;
