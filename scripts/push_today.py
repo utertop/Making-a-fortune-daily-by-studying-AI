@@ -2,6 +2,7 @@
 import argparse
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -12,7 +13,9 @@ if hasattr(sys.stdout, "reconfigure"):
 from apps.api.app.db import init_database
 from apps.api.app.llm.enrichment import enrich_top_signal_candidates
 from apps.api.app.push.feishu import build_today_task_text, send_feishu_text
-from apps.api.app.repository import list_signal_digest_candidates
+from apps.api.app.repository import list_signal_digest_candidates, record_push_run
+
+ARCHIVE_TIMEZONE = timezone(timedelta(hours=8))
 
 
 def emit(value: object) -> None:
@@ -35,7 +38,21 @@ def main() -> None:
     if not args.send:
         emit({"dry_run": True, "enrichment": enrichment, "text": text})
         return
-    emit(send_feishu_text(text))
+    response = send_feishu_text(text)
+    archive_now = datetime.now(ARCHIVE_TIMEZONE)
+    push_run_id = record_push_run(
+        {
+            "archive_date": archive_now.date().isoformat(),
+            "job_name": "manual_push_today",
+            "channel": "feishu",
+            "status": "sent" if response.get("sent") else response.get("reason", "not_sent"),
+            "title": "Manual today push",
+            "task_count": len(signals),
+            "sent_at": archive_now.isoformat() if response.get("sent") else None,
+            "payload": {"enrichment": enrichment, "response": response},
+        }
+    )
+    emit({"push_run_id": push_run_id, **response})
 
 
 if __name__ == "__main__":

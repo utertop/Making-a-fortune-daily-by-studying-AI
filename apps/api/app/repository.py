@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .config import KNOWLEDGE_BASE_DIR
 from .db import get_connection, init_database
 from .document_quality import evaluate_markdown_quality
 from .markdown_drafts import resolve_knowledge_path, to_repo_relative_path
@@ -21,6 +22,8 @@ TASK_STATUSES = {
     "archived",
     "ignored",
 }
+
+ARCHIVE_TIMEZONE = timezone(timedelta(hours=8))
 
 DETECTION_STATUSES = {
     "idle",
@@ -127,6 +130,25 @@ def _sha256_file(path: Path) -> str:
 
 def _iso_from_timestamp(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
+
+def _timestamp_sort_key(value: str) -> datetime:
+    normalized = value.replace("Z", "+00:00")
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", normalized):
+        normalized = normalized.replace(" ", "T") + "+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _current_archive_date() -> str:
+    return datetime.now(ARCHIVE_TIMEZONE).date().isoformat()
 
 
 def upsert_source(source: dict[str, Any]) -> int:
@@ -256,6 +278,8 @@ def count_rows(table: str) -> int:
         "learning_task",
         "knowledge_document",
         "task_event",
+        "archive_day",
+        "push_run",
     }
     if table not in allowed:
         raise ValueError(f"Unsupported table: {table}")
@@ -759,6 +783,290 @@ def list_today_tasks(limit: int = 10) -> list[dict[str, Any]]:
             limit ?
             """,
             (safe_limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def _task_archive_date_expression() -> str:
+    return "date(coalesce(t.doc_submitted_at, t.archived_at, t.reviewed_at, t.created_at), '+8 hours')"
+
+
+def _iter_daily_archive_files() -> list[Path]:
+    daily_dir = KNOWLEDGE_BASE_DIR / "daily"
+    if not daily_dir.exists():
+        return []
+    return [path for path in daily_dir.rglob("*.md") if path.is_file()]
+
+
+def _archive_date_from_path(path: Path) -> str | None:
+    normalized = path.as_posix()
+    match = re.search(r"(?<!\d)(\d{4}-\d{2}-\d{2})(?!\d)", normalized)
+    if match:
+        return match.group(1)
+
+    match = re.search(r"/(\d{4})/(\d{2})/", normalized)
+    if match:
+        return f"{match.group(1)}-{match.group(2)}-01"
+
+    return None
+
+
+def _week_label(day: str) -> str:
+    try:
+        parsed = date_cls.fromisoformat(day)
+    except ValueError:
+        return ""
+    year, week, _ = parsed.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def _empty_archive_day(archive_date: str) -> dict[str, Any]:
+    return {
+        "date": archive_date,
+        "year": archive_date[:4],
+        "month": archive_date[:7],
+        "week": _week_label(archive_date),
+        "task_count": 0,
+        "done_count": 0,
+        "document_count": 0,
+        "push_count": 0,
+        "latest_task_at": None,
+        "latest_document_at": None,
+        "latest_push_at": None,
+    }
+
+
+def _collect_archive_task_days(connection) -> dict[str, dict[str, Any]]:
+    date_expression = _task_archive_date_expression()
+    rows = connection.execute(
+        f"""
+        select
+            {date_expression} as archive_date,
+            count(*) as task_count,
+            sum(case when t.status in ('documented', 'archived', 'ignored') then 1 else 0 end) as done_count,
+            max(coalesce(t.doc_submitted_at, t.archived_at, t.reviewed_at, t.created_at)) as latest_task_at
+        from learning_task t
+        where t.task_type = 'knowledge_doc'
+          and {date_expression} is not null
+        group by archive_date
+        order by archive_date desc
+        """
+    ).fetchall()
+
+    archive_days: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        archive_date = str(row["archive_date"])
+        item = _empty_archive_day(archive_date)
+        item["task_count"] = int(row["task_count"] or 0)
+        item["done_count"] = int(row["done_count"] or 0)
+        item["latest_task_at"] = row["latest_task_at"]
+        archive_days[archive_date] = item
+    return archive_days
+
+
+def _merge_archive_document_days(archive_days: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    for path in _iter_daily_archive_files():
+        archive_date = _archive_date_from_path(path)
+        if not archive_date:
+            continue
+        item = archive_days.setdefault(archive_date, _empty_archive_day(archive_date))
+        item["document_count"] += 1
+        modified_at = _iso_from_timestamp(path.stat().st_mtime)
+        latest_document_at = item.get("latest_document_at")
+        if latest_document_at is None or modified_at > latest_document_at:
+            item["latest_document_at"] = modified_at
+    return archive_days
+
+
+def _merge_archive_push_days(
+    connection,
+    archive_days: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    rows = connection.execute(
+        """
+        select
+            archive_date,
+            count(*) as push_count,
+            max(coalesce(sent_at, created_at)) as latest_push_at
+        from push_run
+        where archive_date is not null
+          and archive_date <> ''
+        group by archive_date
+        """
+    ).fetchall()
+
+    for row in rows:
+        archive_date = str(row["archive_date"])
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", archive_date):
+            continue
+        item = archive_days.setdefault(archive_date, _empty_archive_day(archive_date))
+        item["push_count"] = int(row["push_count"] or 0)
+        item["latest_push_at"] = row["latest_push_at"]
+    return archive_days
+
+
+def _archive_day_rows(connection, limit: int | None = None) -> list[dict[str, Any]]:
+    params: tuple[Any, ...] = ()
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = "limit ?"
+        params = (limit,)
+
+    rows = connection.execute(
+        f"""
+        select
+            archive_date as date,
+            year,
+            month,
+            week,
+            task_count,
+            done_count,
+            document_count,
+            push_count,
+            latest_task_at,
+            latest_document_at,
+            latest_push_at,
+            updated_at
+        from archive_day
+        order by archive_date desc
+        {limit_clause}
+        """,
+        params,
+    ).fetchall()
+    items = [dict(row) for row in rows]
+    for item in items:
+        latest_values = [
+            value
+            for value in (
+                item.get("latest_task_at"),
+                item.get("latest_document_at"),
+                item.get("latest_push_at"),
+            )
+            if value
+        ]
+        item["latest_at"] = max(latest_values, key=_timestamp_sort_key) if latest_values else None
+    return items
+
+
+def refresh_archive_day_index() -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        archive_days = _collect_archive_task_days(connection)
+        archive_days = _merge_archive_document_days(archive_days)
+        archive_days = _merge_archive_push_days(connection, archive_days)
+        archive_dates = sorted(archive_days)
+        for item in archive_days.values():
+            connection.execute(
+                """
+                insert into archive_day (
+                    archive_date, year, month, week, task_count, done_count, document_count,
+                    push_count, latest_task_at, latest_document_at, latest_push_at, source
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'derived')
+                on conflict(archive_date) do update set
+                    year = excluded.year,
+                    month = excluded.month,
+                    week = excluded.week,
+                    task_count = excluded.task_count,
+                    done_count = excluded.done_count,
+                    document_count = excluded.document_count,
+                    push_count = excluded.push_count,
+                    latest_task_at = excluded.latest_task_at,
+                    latest_document_at = excluded.latest_document_at,
+                    latest_push_at = excluded.latest_push_at,
+                    source = excluded.source,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    item["date"],
+                    item["year"],
+                    item["month"],
+                    item["week"],
+                    item["task_count"],
+                    item["done_count"],
+                    item["document_count"],
+                    item["push_count"],
+                    item["latest_task_at"],
+                    item["latest_document_at"],
+                    item["latest_push_at"],
+                ),
+            )
+
+        if archive_dates:
+            placeholders = ", ".join("?" for _ in archive_dates)
+            connection.execute(
+                f"delete from archive_day where source = 'derived' and archive_date not in ({placeholders})",
+                archive_dates,
+            )
+        else:
+            connection.execute("delete from archive_day where source = 'derived'")
+
+        return _archive_day_rows(connection)
+
+
+def list_task_archive_days(limit: int = 120) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(limit, 365))
+    with get_connection() as connection:
+        return _archive_day_rows(connection, safe_limit)
+
+
+def record_push_run(run: dict[str, Any]) -> int:
+    archive_date = str(run.get("archive_date") or _current_archive_date())
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", archive_date):
+        raise ValueError(f"Unsupported archive date: {archive_date}")
+
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            insert into push_run (
+                archive_date, job_name, channel, status, title, task_count, sent_at, payload
+            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                archive_date,
+                run.get("job_name", "manual_push"),
+                run.get("channel", "feishu"),
+                run.get("status", "sent"),
+                run.get("title"),
+                run.get("task_count", 0),
+                run.get("sent_at"),
+                _json_or_none(run.get("payload")),
+            ),
+        )
+        push_run_id = int(cursor.lastrowid)
+
+    refresh_archive_day_index()
+    return push_run_id
+
+
+def list_tasks_for_archive_day(archive_date: str, limit: int = 50) -> list[dict[str, Any]]:
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", archive_date):
+        raise ValueError(f"Unsupported archive date: {archive_date}")
+
+    safe_limit = max(1, min(limit, 100))
+    date_expression = _task_archive_date_expression()
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            {TASK_SELECT_SQL}
+            where t.task_type = 'knowledge_doc'
+              and {date_expression} = ?
+            order by
+                case t.status
+                    when 'pending' then 1
+                    when 'pushed' then 2
+                    when 'selected' then 3
+                    when 'draft_created' then 4
+                    when 'review_pending' then 5
+                    when 'documented' then 6
+                    when 'archived' then 7
+                    when 'ignored' then 8
+                    else 9
+                end,
+                s.signal_score desc,
+                t.updated_at desc,
+                t.id desc
+            limit ?
+            """,
+            (archive_date, safe_limit),
         ).fetchall()
         return [dict(row) for row in rows]
 

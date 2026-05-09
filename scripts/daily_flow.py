@@ -3,6 +3,7 @@ import argparse
 import json
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -17,11 +18,14 @@ from apps.api.app.repository import (
     ensure_today_tasks_from_top_signals,
     list_signal_digest_candidates,
     list_github_repo_scoring_inputs,
+    record_push_run,
     today_task_summary,
     upsert_signal,
 )
 from apps.api.app.scoring import score_github_repo
 from apps.api.app.sources import enabled_sources
+
+ARCHIVE_TIMEZONE = timezone(timedelta(hours=8))
 
 
 def emit(event: str, payload: object) -> None:
@@ -103,7 +107,21 @@ def push_today(limit: int, send: bool) -> dict:
     text = build_today_task_text(signals)
     if not send:
         return {"dry_run": True, "signal_count": len(signals), "text": text}
-    return {"dry_run": False, "signal_count": len(signals), "response": send_feishu_text(text)}
+    response = send_feishu_text(text)
+    archive_now = datetime.now(ARCHIVE_TIMEZONE)
+    push_run_id = record_push_run(
+        {
+            "archive_date": archive_now.date().isoformat(),
+            "job_name": "daily_flow_push",
+            "channel": "feishu",
+            "status": "sent" if response.get("sent") else response.get("reason", "not_sent"),
+            "title": "Daily flow push",
+            "task_count": len(signals),
+            "sent_at": archive_now.isoformat() if response.get("sent") else None,
+            "payload": {"response": response},
+        }
+    )
+    return {"dry_run": False, "signal_count": len(signals), "push_run_id": push_run_id, "response": response}
 
 
 def main() -> None:

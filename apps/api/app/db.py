@@ -20,6 +20,8 @@ REQUIRED_TABLES = (
     "learning_task",
     "knowledge_document",
     "collector_run",
+    "archive_day",
+    "push_run",
     "reminder",
     "task_event",
     "user_feedback",
@@ -33,6 +35,11 @@ LEARNING_TASK_COLUMNS = {
     "review_pending_at": "ALTER TABLE learning_task ADD COLUMN review_pending_at TEXT",
     "ignored_reason": "ALTER TABLE learning_task ADD COLUMN ignored_reason TEXT",
     "detection_status": "ALTER TABLE learning_task ADD COLUMN detection_status TEXT",
+}
+
+ARCHIVE_DAY_COLUMNS = {
+    "push_count": "ALTER TABLE archive_day ADD COLUMN push_count INTEGER NOT NULL DEFAULT 0",
+    "latest_push_at": "ALTER TABLE archive_day ADD COLUMN latest_push_at TEXT",
 }
 
 DEEP_DOSSIER_SUFFIX = "深度项目知识档案"
@@ -123,6 +130,57 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_signal_enrichment_signal_time ON signal_enrichment(signal_id, created_at DESC)"
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS archive_day (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            archive_date TEXT NOT NULL UNIQUE,
+            year TEXT NOT NULL,
+            month TEXT NOT NULL,
+            week TEXT NOT NULL,
+            task_count INTEGER NOT NULL DEFAULT 0,
+            done_count INTEGER NOT NULL DEFAULT 0,
+            document_count INTEGER NOT NULL DEFAULT 0,
+            push_count INTEGER NOT NULL DEFAULT 0,
+            latest_task_at TEXT,
+            latest_document_at TEXT,
+            latest_push_at TEXT,
+            source TEXT NOT NULL DEFAULT 'derived',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS push_run (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            archive_date TEXT NOT NULL,
+            job_name TEXT NOT NULL,
+            channel TEXT NOT NULL DEFAULT 'feishu',
+            status TEXT NOT NULL DEFAULT 'pending',
+            title TEXT,
+            task_count INTEGER NOT NULL DEFAULT 0,
+            sent_at TEXT,
+            payload TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    archive_day_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(archive_day)").fetchall()
+    }
+    for column, statement in ARCHIVE_DAY_COLUMNS.items():
+        if column not in archive_day_columns:
+            connection.execute(statement)
+
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_archive_day_date ON archive_day(archive_date DESC)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_push_run_archive_date ON push_run(archive_date DESC)"
     )
     _migrate_legacy_deep_dossier_records(connection)
 

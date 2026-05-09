@@ -68,6 +68,27 @@ export type TodayTasksPayload = {
   allowed_statuses: string[];
 };
 
+type ArchiveDay = {
+  date: string;
+  year: string;
+  month: string;
+  week: string;
+  task_count: number;
+  done_count: number;
+  document_count: number;
+  push_count: number;
+  latest_task_at: string | null;
+  latest_document_at: string | null;
+  latest_push_at: string | null;
+  latest_at: string | null;
+};
+
+type ArchivePayload = {
+  days: ArchiveDay[];
+};
+
+type WorkspaceView = "today" | "todayArchive" | "historyArchive";
+
 type SignalDetails = {
   language?: string;
   license?: string;
@@ -92,8 +113,10 @@ type TodayWorkspaceProps = {
   apiBaseUrl: string;
   initialAllowedStatuses: string[];
   initialError?: string;
+  initialSelectedArchiveDate?: string | null;
   initialSummary: TodaySummary | null;
   initialTasks: TodayTask[];
+  initialView: WorkspaceView;
 };
 
 type DocumentDraft = {
@@ -169,6 +192,15 @@ function formatDelta(value?: number) {
   return value > 0 ? `+${value}` : `${value}`;
 }
 
+function formatShanghaiDate(value: Date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+  }).format(value);
+}
+
 function formatDateTime(value: string | null) {
   if (!value) {
     return "";
@@ -184,6 +216,39 @@ function formatDateTime(value: string | null) {
     timeStyle: "short",
     timeZone: "Asia/Shanghai",
   }).format(date);
+}
+
+function formatArchiveTime(value: string | null) {
+  if (!value) {
+    return "";
+  }
+
+  const normalized = value.includes("T") ? value : value.replace(" ", "T");
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+    timeZone: "Asia/Shanghai",
+  }).format(date);
+}
+
+function archiveDayState(day: ArchiveDay) {
+  if (day.document_count > 0) {
+    return { className: "has-docs", label: "有文档" };
+  }
+  if (day.push_count > 0) {
+    return { className: "has-pushes", label: "有推送" };
+  }
+  if (day.task_count > 0) {
+    return { className: "has-tasks", label: "有候选" };
+  }
+  return { className: "is-empty", label: "空记录" };
 }
 
 function slugify(value: string) {
@@ -214,6 +279,28 @@ function buildSummary(tasks: TodayTask[]): TodaySummary {
   summary.actionable_count = Math.max(0, summary.total - summary.ignored);
   summary.is_complete = summary.actionable_count > 0 && summary.done_count >= summary.actionable_count;
   return summary;
+}
+
+function groupArchiveDays(days: ArchiveDay[]) {
+  const groups: Array<{ key: string; year: string; month: string; weeks: Array<{ key: string; days: ArchiveDay[] }> }> = [];
+
+  days.forEach((day) => {
+    let monthGroup = groups.find((group) => group.key === day.month);
+    if (!monthGroup) {
+      monthGroup = { key: day.month, year: day.year, month: day.month, weeks: [] };
+      groups.push(monthGroup);
+    }
+
+    let weekGroup = monthGroup.weeks.find((group) => group.key === day.week);
+    if (!weekGroup) {
+      weekGroup = { key: day.week, days: [] };
+      monthGroup.weeks.push(weekGroup);
+    }
+
+    weekGroup.days.push(day);
+  });
+
+  return groups;
 }
 
 async function parseApiError(response: Response): Promise<string> {
@@ -371,11 +458,16 @@ export default function TodayWorkspace({
   apiBaseUrl,
   initialAllowedStatuses,
   initialError,
+  initialSelectedArchiveDate,
   initialSummary,
   initialTasks,
+  initialView,
 }: TodayWorkspaceProps) {
   const [tasks, setTasks] = useState(initialTasks);
   const [allowedStatuses, setAllowedStatuses] = useState(initialAllowedStatuses);
+  const [archiveDays, setArchiveDays] = useState<ArchiveDay[]>([]);
+  const [selectedArchiveDate, setSelectedArchiveDate] = useState<string | null>(initialSelectedArchiveDate ?? null);
+  const [activeView, setActiveView] = useState<WorkspaceView>(initialView);
   const [error, setError] = useState(initialError ?? "");
   const [notice, setNotice] = useState("");
   const [busyTaskId, setBusyTaskId] = useState<number | null>(null);
@@ -385,36 +477,90 @@ export default function TodayWorkspace({
   const [documentDrafts, setDocumentDrafts] = useState<Record<number, DocumentDraft>>({});
   const [documentQualities, setDocumentQualities] = useState<Record<number, DocumentQuality>>({});
   const [ignoreReasons, setIgnoreReasons] = useState<Record<number, string>>({});
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const [runtimeApiBaseUrl] = useState(apiBaseUrl);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const liveSummary = useMemo(() => buildSummary(tasks), [tasks]);
   const summary = initialSummary && tasks.length === initialTasks.length ? liveSummary : liveSummary;
+  const archiveGroups = useMemo(() => groupArchiveDays(archiveDays), [archiveDays]);
   const completionPercent = summary.actionable_count ? Math.round((summary.done_count / summary.actionable_count) * 100) : 0;
   const allowedStatusSet = useMemo(() => new Set(allowedStatuses), [allowedStatuses]);
   const hero = buildHeroContent(summary, completionPercent);
-  const today = new Intl.DateTimeFormat("zh-CN", { dateStyle: "full", timeZone: "Asia/Shanghai" }).format(currentTime);
-  const clockText = new Intl.DateTimeFormat("zh-CN", {
-    dateStyle: "medium",
-    timeStyle: "medium",
-    timeZone: "Asia/Shanghai",
-  }).format(currentTime);
-  const archiveDate = new Intl.DateTimeFormat("en-CA", {
-    day: "2-digit",
-    month: "2-digit",
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-  }).format(currentTime);
-  const [archiveYear, archiveMonth] = archiveDate.split("-");
-  const archivePath = `knowledge-base/daily/${archiveYear}/${archiveMonth}/${archiveDate}/`;
+  const today = currentTime
+    ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "full", timeZone: "Asia/Shanghai" }).format(currentTime)
+    : "加载当前日期...";
+  const clockText = currentTime
+    ? new Intl.DateTimeFormat("zh-CN", {
+        dateStyle: "medium",
+        timeStyle: "medium",
+        timeZone: "Asia/Shanghai",
+      }).format(currentTime)
+    : "同步中...";
+  const archiveDate = currentTime ? formatShanghaiDate(currentTime) : "";
+  const [archiveYear, archiveMonth] = archiveDate ? archiveDate.split("-") : ["YYYY", "MM"];
+  const archivePath = archiveDate ? `knowledge-base/daily/${archiveYear}/${archiveMonth}/${archiveDate}/` : "knowledge-base/daily/YYYY/MM/YYYY-MM-DD/";
+  const latestHistoricalArchiveDate = archiveDays.find((day) => day.date !== archiveDate)?.date ?? null;
 
   const applyTaskUpdate = useCallback((updatedTask: TodayTask) => {
     setTasks((currentTasks) => currentTasks.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
   }, []);
 
-  const refreshTodayTasks = useCallback(
-    async (silent = false) => {
+  const syncWorkspaceUrl = useCallback((view: WorkspaceView, date?: string, replace = false) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const url = new URL(window.location.href);
+    if (view === "today") {
+      url.searchParams.set("view", "today");
+      url.searchParams.delete("date");
+    } else {
+      url.searchParams.set("view", "archive");
+      if (date) {
+        url.searchParams.set("date", date);
+      }
+    }
+
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    if (nextUrl === `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      return;
+    }
+
+    if (replace) {
+      window.history.replaceState(null, "", nextUrl);
+    } else {
+      window.history.pushState(null, "", nextUrl);
+    }
+  }, []);
+
+  const viewForArchiveDate = useCallback(
+    (date: string): WorkspaceView => {
+      const todayArchiveDate = archiveDate || formatShanghaiDate(new Date());
+      return date === todayArchiveDate ? "todayArchive" : "historyArchive";
+    },
+    [archiveDate],
+  );
+
+  const refreshArchiveDays = useCallback(async (options?: { rebuild?: boolean }) => {
+    try {
+      const response = await fetch(`${runtimeApiBaseUrl}${options?.rebuild ? "/archives/refresh" : "/archives"}?limit=180`, {
+        cache: "no-store",
+        method: options?.rebuild ? "POST" : "GET",
+      });
+      if (!response.ok) {
+        throw new Error(await parseApiError(response));
+      }
+
+      const payload = (await response.json()) as ArchivePayload;
+      setArchiveDays(payload.days);
+    } catch (archiveError) {
+      setError(archiveError instanceof Error ? archiveError.message : "Unable to load archives.");
+    }
+  }, [runtimeApiBaseUrl]);
+
+  const loadTodayTasks = useCallback(
+    async (silent = false, options?: { replaceUrl?: boolean; syncUrl?: boolean }) => {
       if (!silent) {
         setIsRefreshing(true);
         setError("");
@@ -429,6 +575,12 @@ export default function TodayWorkspace({
         const payload = (await response.json()) as TodayTasksPayload;
         setTasks(payload.tasks);
         setAllowedStatuses(payload.allowed_statuses);
+        setSelectedArchiveDate(null);
+        setActiveView("today");
+        if (options?.syncUrl) {
+          syncWorkspaceUrl("today", undefined, options.replaceUrl);
+        }
+        void refreshArchiveDays();
         if (!silent) {
           setNotice("今日任务已刷新。");
         }
@@ -443,7 +595,68 @@ export default function TodayWorkspace({
         }
       }
     },
-    [runtimeApiBaseUrl],
+    [refreshArchiveDays, runtimeApiBaseUrl, syncWorkspaceUrl],
+  );
+
+  const refreshTodayCandidates = useCallback(async () => {
+    setIsRefreshing(true);
+    setError("");
+
+    try {
+      const response = await fetch(`${runtimeApiBaseUrl}/tasks/today/refresh?limit=10`, {
+        cache: "no-store",
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(await parseApiError(response));
+      }
+
+      const payload = (await response.json()) as TodayTasksPayload;
+      setTasks(payload.tasks);
+      setAllowedStatuses(payload.allowed_statuses);
+      setSelectedArchiveDate(null);
+      setActiveView("today");
+      syncWorkspaceUrl("today");
+      void refreshArchiveDays({ rebuild: true });
+      setNotice("今日候选已刷新。");
+    } catch (refreshError) {
+      setError(refreshError instanceof Error ? refreshError.message : "刷新今日候选失败。");
+      setNotice("");
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [refreshArchiveDays, runtimeApiBaseUrl, syncWorkspaceUrl]);
+
+  const loadArchiveDate = useCallback(
+    async (archiveDate: string, options?: { replaceUrl?: boolean; syncUrl?: boolean; view?: WorkspaceView }) => {
+      setIsRefreshing(true);
+      setError("");
+      try {
+        const response = await fetch(`${runtimeApiBaseUrl}/tasks/archive?date=${encodeURIComponent(archiveDate)}&limit=50`, {
+          cache: "no-store",
+        });
+        if (!response.ok) {
+          throw new Error(await parseApiError(response));
+        }
+
+        const payload = (await response.json()) as TodayTasksPayload;
+        setTasks(payload.tasks);
+        setAllowedStatuses(payload.allowed_statuses);
+        setSelectedArchiveDate(archiveDate);
+        const nextView = options?.view ?? viewForArchiveDate(archiveDate);
+        setActiveView(nextView);
+        if (options?.syncUrl !== false) {
+          syncWorkspaceUrl(nextView, archiveDate, options?.replaceUrl);
+        }
+        setNotice(`已加载 ${archiveDate} 归档。`);
+      } catch (archiveError) {
+        setError(archiveError instanceof Error ? archiveError.message : "Unable to load archive day.");
+        setNotice("");
+      } finally {
+        setIsRefreshing(false);
+      }
+    },
+    [runtimeApiBaseUrl, syncWorkspaceUrl, viewForArchiveDate],
   );
 
   const runBulkDetection = useCallback(
@@ -482,14 +695,47 @@ export default function TodayWorkspace({
   );
 
   useEffect(() => {
+    setCurrentTime(new Date());
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => void refreshTodayTasks(true), 60000);
+    void refreshArchiveDays({ rebuild: true });
+  }, [refreshArchiveDays]);
+
+  useEffect(() => {
+    if (archiveDate && selectedArchiveDate === archiveDate && activeView === "historyArchive") {
+      setActiveView("todayArchive");
+    }
+  }, [activeView, archiveDate, selectedArchiveDate]);
+
+  useEffect(() => {
+    if (activeView !== "today") {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => void loadTodayTasks(true), 60000);
     return () => window.clearInterval(timer);
-  }, [refreshTodayTasks]);
+  }, [activeView, loadTodayTasks]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const urlView = params.get("view");
+      const urlDate = params.get("date");
+
+      if (urlView === "archive" && urlDate) {
+        void loadArchiveDate(urlDate, { replaceUrl: true, syncUrl: false, view: viewForArchiveDate(urlDate) });
+        return;
+      }
+
+      void loadTodayTasks(false, { replaceUrl: true, syncUrl: false });
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [loadArchiveDate, loadTodayTasks, viewForArchiveDate]);
 
   useEffect(() => {
     const timer = window.setInterval(() => void runBulkDetection(true), 45000);
@@ -525,6 +771,7 @@ export default function TodayWorkspace({
 
       const payload = (await response.json()) as { task: TodayTask };
       applyTaskUpdate(payload.task);
+      void refreshArchiveDays({ rebuild: true });
       setNotice(`${task.title} 已更新为「${statusLabels[status]}」。`);
     } catch (updateError) {
       setError(updateError instanceof Error ? updateError.message : "更新任务状态失败。");
@@ -548,6 +795,7 @@ export default function TodayWorkspace({
 
       const payload = (await response.json()) as { draft: { path: string }; task: TodayTask };
       applyTaskUpdate(payload.task);
+      void refreshArchiveDays({ rebuild: true });
       setNotice(`Markdown 草稿已生成：${payload.draft.path}`);
     } catch (draftError) {
       setError(draftError instanceof Error ? draftError.message : "生成 Markdown 草稿失败。");
@@ -567,6 +815,9 @@ export default function TodayWorkspace({
 
       const payload = (await response.json()) as { task: TodayTask; changed: boolean; reason: string };
       applyTaskUpdate(payload.task);
+      if (payload.changed) {
+        void refreshArchiveDays({ rebuild: true });
+      }
       setNotice(payload.changed ? "检测到 Markdown 已更新，等待确认归档。" : "还没有发现新的 Markdown 更新。");
     } catch (detectError) {
       setError(detectError instanceof Error ? detectError.message : "检测 Markdown 失败。");
@@ -644,6 +895,7 @@ export default function TodayWorkspace({
 
       const payload = (await response.json()) as { task: TodayTask };
       applyTaskUpdate(payload.task);
+      void refreshArchiveDays({ rebuild: true });
       if ("document_quality" in payload.task) {
         setDocumentQualities((currentQualities) => ({
           ...currentQualities,
@@ -666,6 +918,103 @@ export default function TodayWorkspace({
 
   return (
     <main className="page-shell">
+      <div className="workspace-layout">
+        <aside className="archive-sidebar" aria-label="Archive directory">
+          <div className="archive-sidebar-header">
+            <div>
+              <p className="panel-label">Archive</p>
+              <h2>归档目录</h2>
+            </div>
+            <button disabled={isRefreshing} onClick={() => void refreshArchiveDays({ rebuild: true })} type="button">
+              同步
+            </button>
+            <button
+              aria-label="查看今日归档"
+              disabled={!archiveDate || selectedArchiveDate === archiveDate || isRefreshing}
+              onClick={() => void loadArchiveDate(archiveDate, { view: "todayArchive" })}
+              title="查看今日归档"
+              type="button"
+            >
+              今日归档
+            </button>
+          </div>
+
+          {archiveGroups.length === 0 ? (
+            <div className="archive-empty">服务运行后生成的推送和 Markdown 会出现在这里。</div>
+          ) : (
+            <div className="archive-tree">
+              {archiveGroups.map((monthGroup, monthIndex) => (
+                <details className="archive-month" key={monthGroup.key} open={monthIndex === 0}>
+                  <summary className="archive-month-title">
+                    <strong>{monthGroup.month}</strong>
+                    <span>{monthGroup.weeks.reduce((total, week) => total + week.days.length, 0)} 天</span>
+                  </summary>
+                  {monthGroup.weeks.map((weekGroup, weekIndex) => (
+                    <details className="archive-week" key={`${monthGroup.key}-${weekGroup.key}`} open={monthIndex === 0 && weekIndex === 0}>
+                      <summary>{weekGroup.key}</summary>
+                      <div className="archive-day-list">
+                        {weekGroup.days.map((day) => {
+                          const state = archiveDayState(day);
+                          const latestTime = formatArchiveTime(day.latest_at);
+
+                          return (
+                            <button
+                              className={`archive-day-button ${state.className}${day.date === selectedArchiveDate ? " is-active" : ""}`}
+                              disabled={isRefreshing}
+                              key={day.date}
+                              onClick={() => void loadArchiveDate(day.date, { view: viewForArchiveDate(day.date) })}
+                              type="button"
+                              title={`${day.date}: ${day.task_count} tasks / ${day.document_count} docs / ${day.push_count} pushes`}
+                            >
+                              <span className="archive-day-main">
+                                <span className="archive-day-date">{day.date.slice(5)}</span>
+                                <span className="archive-day-state">{state.label}</span>
+                              </span>
+                              <span className="archive-day-metrics">
+                                <span>任务 {day.task_count}</span>
+                                <span>文档 {day.document_count}</span>
+                                <span>推送 {day.push_count}</span>
+                              </span>
+                              {latestTime ? <span className="archive-day-latest">最近 {latestTime}</span> : null}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  ))}
+                </details>
+              ))}
+            </div>
+          )}
+        </aside>
+
+        <div className="workspace-main">
+          <nav className="view-switcher" aria-label="Workspace view">
+            <button className={activeView === "today" ? "is-active" : ""} disabled={isRefreshing} onClick={() => void loadTodayTasks(false, { syncUrl: true })} type="button">
+              今日候选
+            </button>
+            <button
+              className={activeView === "todayArchive" ? "is-active" : ""}
+              disabled={!archiveDate || isRefreshing}
+              onClick={() => void loadArchiveDate(archiveDate, { view: "todayArchive" })}
+              type="button"
+            >
+              今日归档
+            </button>
+            <button
+              className={activeView === "historyArchive" ? "is-active" : ""}
+              disabled={!latestHistoricalArchiveDate || isRefreshing}
+              onClick={() => {
+                const targetDate = selectedArchiveDate && selectedArchiveDate !== archiveDate ? selectedArchiveDate : latestHistoricalArchiveDate;
+                if (targetDate) {
+                  void loadArchiveDate(targetDate, { view: "historyArchive" });
+                }
+              }}
+              type="button"
+            >
+              历史归档
+            </button>
+          </nav>
       <header className="workspace-header">
         <div className="workspace-hero">
           <div className="workspace-hero-copy">
@@ -677,7 +1026,11 @@ export default function TodayWorkspace({
             <div className="hero-stat-card hero-stat-card-strong">
               <span>{completionPercent}%</span>
               <strong>今日完成度</strong>
-              <p>{hero.chips.join(" / ")}</p>
+              <div className="hero-chip-row">
+                {hero.chips.map((chip) => (
+                  <span key={chip}>{chip}</span>
+                ))}
+              </div>
               <div className="hero-progress">
                 <div className="hero-progress-track">
                   <div className="hero-progress-fill" style={{ width: `${completionPercent}%` }} />
@@ -709,8 +1062,8 @@ export default function TodayWorkspace({
         <div className="attention-card action-card">
           <strong>当前时间</strong>
           <p>{clockText}</p>
-          <button disabled={isRefreshing} onClick={() => void refreshTodayTasks()} type="button">
-            {isRefreshing ? "刷新中..." : "刷新任务"}
+          <button disabled={isRefreshing} onClick={() => void refreshTodayCandidates()} type="button">
+            {isRefreshing ? "刷新中..." : "刷新今日候选"}
           </button>
         </div>
       </section>
@@ -1160,6 +1513,8 @@ export default function TodayWorkspace({
           </div>
         )}
       </section>
+        </div>
+      </div>
     </main>
   );
 }

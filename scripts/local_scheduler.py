@@ -20,6 +20,7 @@ from apps.api.app.repository import (
     get_learning_tasks_by_ids,
     list_signal_digest_candidates,
     list_today_tasks,
+    record_push_run,
     update_learning_task_status,
 )
 from daily_flow import collect_github, collect_rss, prepare_today_tasks, score_github
@@ -415,6 +416,19 @@ def run_job(job_name: str, state: dict[str, Any], preview: bool) -> dict[str, An
         result = run_deadline_job(job_name, state, current, preview)
 
     if should_record_run(result):
+        response = result.get("response") if isinstance(result.get("response"), dict) else {}
+        record_push_run(
+            {
+                "archive_date": current.date().isoformat(),
+                "job_name": job_name,
+                "channel": "feishu",
+                "status": "skipped" if result.get("skipped") else ("sent" if response.get("sent") else response.get("reason", "not_sent")),
+                "title": job_name,
+                "task_count": result.get("task_count") or result.get("signal_count") or 0,
+                "sent_at": current.isoformat() if response.get("sent") else None,
+                "payload": result,
+            }
+        )
         state.setdefault("last_run", {})[job_name] = current.date().isoformat()
         save_state(state)
     return result

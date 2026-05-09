@@ -16,7 +16,11 @@ from .repository import (
     detect_documents,
     ensure_today_tasks_from_top_signals,
     get_task_for_markdown_draft,
+    list_task_archive_days,
+    list_tasks_for_archive_day,
+    list_today_tasks,
     list_top_signals,
+    refresh_archive_day_index,
     submit_knowledge_document_for_task,
     today_task_summary,
     update_learning_task_status,
@@ -91,7 +95,46 @@ def top_signals(limit: int = 10) -> dict:
 def today_tasks(limit: int = 10) -> dict:
     ensure_database()
     safe_limit = max(1, min(limit, 50))
+    tasks = list_today_tasks(limit=safe_limit)
+    return {
+        "tasks": tasks,
+        "summary": today_task_summary(tasks),
+        "allowed_statuses": sorted(TASK_STATUSES),
+    }
+
+
+@app.post("/tasks/today/refresh")
+def refresh_today_tasks(limit: int = 10) -> dict:
+    ensure_database()
+    safe_limit = max(1, min(limit, 50))
     tasks = ensure_today_tasks_from_top_signals(limit=safe_limit)
+    return {
+        "tasks": tasks,
+        "summary": today_task_summary(tasks),
+        "allowed_statuses": sorted(TASK_STATUSES),
+    }
+
+
+@app.get("/archives")
+def archives(limit: int = 120) -> dict:
+    ensure_database()
+    return {"days": list_task_archive_days(limit=limit)}
+
+
+@app.post("/archives/refresh")
+def refresh_archives(limit: int = 120) -> dict:
+    ensure_database()
+    safe_limit = max(1, min(limit, 365))
+    return {"days": refresh_archive_day_index()[:safe_limit]}
+
+
+@app.get("/tasks/archive")
+def archive_tasks(date: str, limit: int = 50) -> dict:
+    ensure_database()
+    try:
+        tasks = list_tasks_for_archive_day(archive_date=date, limit=limit)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     return {
         "tasks": tasks,
         "summary": today_task_summary(tasks),

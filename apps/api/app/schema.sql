@@ -155,6 +155,37 @@ CREATE TABLE IF NOT EXISTS collector_run (
     FOREIGN KEY(source_id) REFERENCES source(id)
 );
 
+CREATE TABLE IF NOT EXISTS archive_day (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    archive_date TEXT NOT NULL UNIQUE,
+    year TEXT NOT NULL,
+    month TEXT NOT NULL,
+    week TEXT NOT NULL,
+    task_count INTEGER NOT NULL DEFAULT 0,
+    done_count INTEGER NOT NULL DEFAULT 0,
+    document_count INTEGER NOT NULL DEFAULT 0,
+    push_count INTEGER NOT NULL DEFAULT 0,
+    latest_task_at TEXT,
+    latest_document_at TEXT,
+    latest_push_at TEXT,
+    source TEXT NOT NULL DEFAULT 'derived',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS push_run (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    archive_date TEXT NOT NULL,
+    job_name TEXT NOT NULL,
+    channel TEXT NOT NULL DEFAULT 'feishu',
+    status TEXT NOT NULL DEFAULT 'pending',
+    title TEXT,
+    task_count INTEGER NOT NULL DEFAULT 0,
+    sent_at TEXT,
+    payload TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS reminder (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER,
@@ -195,3 +226,5 @@ CREATE INDEX IF NOT EXISTS idx_github_repo_snapshot_repo_time ON github_repo_sna
 CREATE INDEX IF NOT EXISTS idx_learning_task_status ON learning_task(status);
 CREATE INDEX IF NOT EXISTS idx_task_event_task_time ON task_event(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_collector_run_status ON collector_run(status);
+CREATE INDEX IF NOT EXISTS idx_archive_day_date ON archive_day(archive_date DESC);
+CREATE INDEX IF NOT EXISTS idx_push_run_archive_date ON push_run(archive_date DESC);
