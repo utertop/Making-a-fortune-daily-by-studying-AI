@@ -242,6 +242,21 @@ Send to Feishu:
 
 The script does not send anything unless `--send` is provided.
 
+Run LLM enrichment before building the push:
+
+```powershell
+.venv\Scripts\python scripts\push_today.py --enrich --limit 10
+```
+
+To make scheduled pushes run enrichment by default, set this in `.env`:
+
+```text
+AI_SIGNAL_RADAR_PUSH_ENRICH_ENABLED=true
+AI_SIGNAL_RADAR_PUSH_ENRICH_LIMIT_MULTIPLIER=2
+```
+
+Use `--no-enrich` on `push_today.py` or `daily_flow.py` to disable enrichment for one run.
+
 Preview one local scheduled push without sending:
 
 ```powershell

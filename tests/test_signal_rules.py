@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from fastapi.testclient import TestClient
+
 from apps.api.app.collectors.rss import _score_entry
 from apps.api.app.document_quality import evaluate_markdown_quality
-from apps.api.app.llm.enrichment import enrich_signal
+from apps.api.app.llm.client import llm_status
+from apps.api.app.llm.enrichment import enrich_signal, push_enrichment_enabled, push_enrichment_limit
 from apps.api.app.llm.schemas import validate_signal_enrichment
+from apps.api.app.main import app
 from apps.api.app.push.feishu import build_today_task_text
 from apps.api.app.scoring import score_github_repo
 from scripts.local_scheduler import build_deadline_text
@@ -205,6 +209,64 @@ def test_llm_enrichment_validation_clamps_to_fixed_taxonomy() -> None:
     assert enriched["priority"] == "must_read"
     assert enriched["llm_score"] == 100.0
     assert enriched["reason"] == "Useful for agent workflow observation."
+
+
+def test_llm_status_is_sanitized(monkeypatch) -> None:
+    monkeypatch.setenv("AI_SIGNAL_RADAR_LLM_ENABLED", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-key-value")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://integrate.api.nvidia.com/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "openai/gpt-oss-20b")
+
+    status = llm_status()
+
+    assert status["enabled"] is True
+    assert status["has_api_key"] is True
+    assert status["base_url_host"] == "integrate.api.nvidia.com"
+    assert status["model"] == "openai/gpt-oss-20b"
+    assert "secret-key-value" not in str(status)
+
+
+def test_signal_enrich_endpoint_returns_summary(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "apps.api.app.main.enrich_top_signal_candidates",
+        lambda limit: {"enabled": True, "processed": limit, "created": 1, "cached": 2, "errors": []},
+    )
+
+    response = TestClient(app).post("/signals/enrich", json={"limit": 3})
+
+    assert response.status_code == 200
+    assert response.json()["processed"] == 3
+
+
+def test_push_enrichment_config_uses_env(monkeypatch) -> None:
+    monkeypatch.setenv("AI_SIGNAL_RADAR_PUSH_ENRICH_ENABLED", "yes")
+    monkeypatch.setenv("AI_SIGNAL_RADAR_PUSH_ENRICH_LIMIT_MULTIPLIER", "3")
+
+    assert push_enrichment_enabled() is True
+    assert push_enrichment_limit(5) == 15
+
+
+def test_llm_feedback_endpoint_records_summary(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "apps.api.app.main.record_llm_feedback",
+        lambda task_id, feedback_type: {
+            "id": 9,
+            "signal_id": 7,
+            "feedback_type": feedback_type,
+            "comment": "{}",
+            "created_at": "2026-05-09",
+        },
+    )
+    monkeypatch.setattr(
+        "apps.api.app.main.llm_feedback_summary",
+        lambda: {"total": 1, "counts": {"llm_helpful": 1, "llm_inaccurate": 0, "llm_vague": 0}, "helpful_rate": 1.0},
+    )
+
+    response = TestClient(app).post("/tasks/3/llm-feedback", json={"feedback_type": "llm_helpful"})
+
+    assert response.status_code == 200
+    assert response.json()["feedback"]["feedback_type"] == "llm_helpful"
+    assert response.json()["summary"]["helpful_rate"] == 1.0
 
 
 def test_llm_enrichment_uses_cache_boundary_and_structured_output(monkeypatch) -> None:

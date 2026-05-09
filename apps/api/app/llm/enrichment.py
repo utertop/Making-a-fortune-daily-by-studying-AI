@@ -17,6 +17,25 @@ from ..settings import get_env
 CompletionFn = Callable[[List[Dict[str, str]]], Dict[str, Any]]
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = get_env(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def push_enrichment_enabled(default: bool = False) -> bool:
+    return _env_bool("AI_SIGNAL_RADAR_PUSH_ENRICH_ENABLED", default)
+
+
+def push_enrichment_limit(limit: int) -> int:
+    try:
+        multiplier = int(get_env("AI_SIGNAL_RADAR_PUSH_ENRICH_LIMIT_MULTIPLIER", "2") or 2)
+    except ValueError:
+        multiplier = 2
+    return max(limit, limit * max(1, multiplier), 10)
+
+
 def signal_input_hash(signal: dict[str, Any]) -> str:
     payload = {
         "title": signal.get("title"),

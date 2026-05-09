@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from apps.api.app.db import init_database
+from apps.api.app.llm.enrichment import enrich_top_signal_candidates, push_enrichment_enabled, push_enrichment_limit
 from apps.api.app.push.feishu import build_today_task_text, send_feishu_text
 from apps.api.app.repository import (
     ensure_learning_task_for_signal,
@@ -372,6 +373,7 @@ def should_record_run(result: dict[str, Any]) -> bool:
 def run_signal_push_job(job_name: str, state: dict[str, Any], current: datetime, preview: bool) -> dict[str, Any]:
     limit = limit_for_job(job_name, current)
     run_collection_pipeline(limit=limit)
+    enrichment = enrich_top_signal_candidates(limit=push_enrichment_limit(limit)) if push_enrichment_enabled() else None
     signals = list_signal_digest_candidates(github_limit=max(limit * 3, 30), source_limit=10)
     if not preview:
         ensure_top_signal_tasks_pushed(signals[:limit])
@@ -388,7 +390,7 @@ def run_signal_push_job(job_name: str, state: dict[str, Any], current: datetime,
     response = send_text(text, preview=preview)
     if job_name == MORNING_JOB:
         update_carryover_after_morning(state, current)
-    return {"signal_count": len(signals), "limit": limit, "response": response}
+    return {"signal_count": len(signals), "limit": limit, "enrichment": enrichment, "response": response}
 
 
 def run_deadline_job(job_name: str, state: dict[str, Any], current: datetime, preview: bool) -> dict[str, Any]:

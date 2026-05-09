@@ -64,12 +64,27 @@ TASK_SELECT_SQL = """
         s.signal_score,
         s.source_type,
         s.raw_content,
+        latest_enrichment.ai_category as llm_ai_category,
+        latest_enrichment.project_type as llm_project_type,
+        latest_enrichment.relevance as llm_relevance,
+        latest_enrichment.priority as llm_priority,
+        latest_enrichment.llm_score as llm_score,
+        latest_enrichment.provider as llm_provider,
+        latest_enrichment.model as llm_model,
+        latest_enrichment.reason as llm_reason,
+        latest_enrichment.risk as llm_risk,
+        latest_enrichment.suggested_action as llm_suggested_action,
         d.id as document_id,
         d.title as document_title,
         d.path as document_path,
         d.summary as document_summary
     from learning_task t
     left join signal s on s.id = t.signal_id
+    left join signal_enrichment latest_enrichment on latest_enrichment.id = (
+        select max(e2.id)
+        from signal_enrichment e2
+        where e2.signal_id = s.id
+    )
     left join knowledge_document d on d.path = t.target_doc_path
 """
 
@@ -280,12 +295,84 @@ def count_rows(table: str) -> int:
         "task_event",
         "archive_day",
         "push_run",
+        "user_feedback",
     }
     if table not in allowed:
         raise ValueError(f"Unsupported table: {table}")
     with get_connection() as connection:
         row = connection.execute(f"select count(*) as count from {table}").fetchone()
         return int(row["count"])
+
+
+LLM_FEEDBACK_TYPES = {"llm_helpful", "llm_inaccurate", "llm_vague"}
+
+
+def record_llm_feedback(task_id: int, feedback_type: str) -> dict[str, Any]:
+    if feedback_type not in LLM_FEEDBACK_TYPES:
+        raise ValueError(f"Unsupported LLM feedback type: {feedback_type}")
+
+    with get_connection() as connection:
+        task = _fetch_task_row(connection, task_id)
+        if task.get("signal_id") is None:
+            raise ValueError(f"Task has no signal: {task_id}")
+        if not task.get("llm_reason") and not task.get("llm_risk") and not task.get("llm_suggested_action"):
+            raise ValueError(f"Task has no LLM enrichment: {task_id}")
+
+        comment = _json_or_none(
+            {
+                "task_id": task_id,
+                "model": task.get("llm_model"),
+                "priority": task.get("llm_priority"),
+                "ai_category": task.get("llm_ai_category"),
+                "project_type": task.get("llm_project_type"),
+                "reason": task.get("llm_reason"),
+                "risk": task.get("llm_risk"),
+                "suggested_action": task.get("llm_suggested_action"),
+            }
+        )
+        cursor = connection.execute(
+            """
+            insert into user_feedback (signal_id, feedback_type, comment)
+            values (?, ?, ?)
+            """,
+            (task["signal_id"], feedback_type, comment),
+        )
+        feedback = connection.execute(
+            """
+            select id, signal_id, feedback_type, comment, created_at
+            from user_feedback
+            where id = ?
+            """,
+            (int(cursor.lastrowid),),
+        ).fetchone()
+        _record_task_event(
+            connection,
+            task_id=task_id,
+            event_type="llm_feedback",
+            payload={"feedback_id": int(cursor.lastrowid), "feedback_type": feedback_type},
+        )
+        return dict(feedback)
+
+
+def llm_feedback_summary() -> dict[str, Any]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            select feedback_type, count(*) as count
+            from user_feedback
+            where feedback_type in ('llm_helpful', 'llm_inaccurate', 'llm_vague')
+            group by feedback_type
+            """
+        ).fetchall()
+        counts = {feedback_type: 0 for feedback_type in sorted(LLM_FEEDBACK_TYPES)}
+        counts.update({row["feedback_type"]: int(row["count"] or 0) for row in rows})
+        total = sum(counts.values())
+        helpful = counts["llm_helpful"]
+        return {
+            "total": total,
+            "counts": counts,
+            "helpful_rate": round(helpful / total, 3) if total else None,
+        }
 
 
 def upsert_signal(signal: dict[str, Any]) -> tuple[int, bool]:

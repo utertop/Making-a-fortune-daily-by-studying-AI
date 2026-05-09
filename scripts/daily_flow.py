@@ -4,7 +4,7 @@ import json
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Callable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -12,6 +12,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from apps.api.app.collectors.github import collect_github_search_source
 from apps.api.app.collectors.rss import collect_rss_source
 from apps.api.app.db import database_status, init_database
+from apps.api.app.llm.enrichment import enrich_top_signal_candidates, push_enrichment_enabled, push_enrichment_limit
 from apps.api.app.push.feishu import build_today_task_text, send_feishu_text
 from apps.api.app.repository import (
     count_rows,
@@ -102,11 +103,15 @@ def prepare_today_tasks(limit: int) -> dict:
     return {"task_count": len(tasks), "summary": today_task_summary(tasks)}
 
 
-def push_today(limit: int, send: bool) -> dict:
+def run_llm_enrichment(limit: int) -> dict:
+    return enrich_top_signal_candidates(limit=push_enrichment_limit(limit))
+
+
+def push_today(limit: int, send: bool, enrichment: Optional[dict] = None) -> dict:
     signals = list_signal_digest_candidates(github_limit=max(limit * 3, 30), source_limit=10)
     text = build_today_task_text(signals)
     if not send:
-        return {"dry_run": True, "signal_count": len(signals), "text": text}
+        return {"dry_run": True, "enrichment": enrichment, "signal_count": len(signals), "text": text}
     response = send_feishu_text(text)
     archive_now = datetime.now(ARCHIVE_TIMEZONE)
     push_run_id = record_push_run(
@@ -118,10 +123,10 @@ def push_today(limit: int, send: bool) -> dict:
             "title": "Daily flow push",
             "task_count": len(signals),
             "sent_at": archive_now.isoformat() if response.get("sent") else None,
-            "payload": {"response": response},
+            "payload": {"enrichment": enrichment, "response": response},
         }
     )
-    return {"dry_run": False, "signal_count": len(signals), "push_run_id": push_run_id, "response": response}
+    return {"dry_run": False, "enrichment": enrichment, "signal_count": len(signals), "push_run_id": push_run_id, "response": response}
 
 
 def main() -> None:
@@ -130,6 +135,9 @@ def main() -> None:
     parser.add_argument("--skip-github", action="store_true", help="Skip GitHub collection")
     parser.add_argument("--skip-push", action="store_true", help="Skip Feishu preview/send step")
     parser.add_argument("--send", action="store_true", help="Actually send Feishu message")
+    enrich_group = parser.add_mutually_exclusive_group()
+    enrich_group.add_argument("--enrich", action="store_true", help="Force LLM enrichment before building the push")
+    enrich_group.add_argument("--no-enrich", action="store_true", help="Disable LLM enrichment for this run")
     parser.add_argument("--rss-max-entries", type=int, default=20, help="Max RSS entries per source")
     parser.add_argument("--github-per-page", type=int, default=20, help="GitHub search result count per source")
     parser.add_argument("--limit", type=int, default=10, help="Top signal/task limit")
@@ -148,7 +156,9 @@ def main() -> None:
     timed_step("prepare_today_tasks", lambda: prepare_today_tasks(args.limit))
 
     if not args.skip_push:
-        timed_step("push_today", lambda: push_today(args.limit, args.send))
+        should_enrich = args.enrich or (push_enrichment_enabled() and not args.no_enrich)
+        enrichment = timed_step("llm_enrich", lambda: run_llm_enrichment(args.limit)) if should_enrich else None
+        timed_step("push_today", lambda: push_today(args.limit, args.send, enrichment=enrichment))
 
     emit(
         "done",

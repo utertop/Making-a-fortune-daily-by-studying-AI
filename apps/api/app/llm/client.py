@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -15,6 +16,34 @@ class LLMNotConfigured(RuntimeError):
 def is_llm_enabled() -> bool:
     enabled = str(get_env("AI_SIGNAL_RADAR_LLM_ENABLED", "false")).lower() in {"1", "true", "yes", "on"}
     return enabled and bool(get_env("OPENAI_API_KEY")) and bool(get_env("OPENAI_MODEL"))
+
+
+def llm_status() -> dict[str, Any]:
+    configured_enabled = str(get_env("AI_SIGNAL_RADAR_LLM_ENABLED", "false")).lower() in {"1", "true", "yes", "on"}
+    api_key = get_env("OPENAI_API_KEY")
+    model = get_env("OPENAI_MODEL")
+    base_url = (get_env("OPENAI_BASE_URL", "https://api.openai.com/v1") or "").rstrip("/")
+    parsed_base_url = urlparse(base_url)
+    missing = [
+        name
+        for name, value in (
+            ("AI_SIGNAL_RADAR_LLM_ENABLED", "true" if configured_enabled else ""),
+            ("OPENAI_API_KEY", api_key),
+            ("OPENAI_MODEL", model),
+        )
+        if not value
+    ]
+
+    return {
+        "enabled": configured_enabled and bool(api_key) and bool(model),
+        "configured_enabled": configured_enabled,
+        "provider": "openai-compatible",
+        "base_url_host": parsed_base_url.netloc or parsed_base_url.path or "unknown",
+        "model": model or "",
+        "has_api_key": bool(api_key),
+        "has_model": bool(model),
+        "missing": missing,
+    }
 
 
 def _env_int(name: str, default: int) -> int:

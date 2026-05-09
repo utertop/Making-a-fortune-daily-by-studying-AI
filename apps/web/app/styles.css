@@ -317,7 +317,7 @@ h3 {
 
 .attention-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -361,6 +361,71 @@ h3 {
 .attention-card.highlight {
   background: #fffaf2;
   border-color: #f3d2a3;
+}
+
+.llm-status-card {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+}
+
+.llm-status-card p {
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.llm-status-card span {
+  display: block;
+  color: #5d6c66;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.llm-status-card small {
+  display: block;
+  color: #6b7a73;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.llm-status-card button {
+  justify-self: start;
+  margin-top: 2px;
+  min-height: 30px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.llm-status-card button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.llm-status-card.is-on {
+  background: #f2fbf7;
+  border-color: #cce8dd;
+}
+
+.llm-status-card.is-on p {
+  color: var(--success-text);
+  background: #d8f3e8;
+}
+
+.llm-status-card.is-off p {
+  color: var(--warning-text);
+  background: var(--warning-bg);
+}
+
+.llm-status-card.is-error p {
+  color: var(--danger);
+  background: #fff1f2;
 }
 
 .attention-card.action-card {
@@ -1105,6 +1170,86 @@ dd {
   border-radius: 999px;
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.llm-insight-panel {
+  display: grid;
+  gap: 7px;
+  padding: 10px 11px;
+  background: #f3f8ff;
+  border: 1px solid #cddcfb;
+  border-radius: 8px;
+}
+
+.llm-insight-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.llm-insight-header strong {
+  color: #1d426f;
+  font-size: 12px;
+}
+
+.llm-insight-header span {
+  max-width: 62%;
+  padding: 3px 7px;
+  color: #21558f;
+  background: #e8f0ff;
+  border: 1px solid #cddcfb;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.llm-insight-panel p {
+  margin: 0;
+  color: #334861;
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.llm-insight-panel .llm-risk {
+  color: #6b4b21;
+}
+
+.llm-insight-panel .llm-action {
+  color: #245947;
+}
+
+.llm-feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.llm-feedback-actions button {
+  min-height: 28px;
+  padding: 5px 8px;
+  color: #21558f;
+  background: #ffffff;
+  border: 1px solid #cddcfb;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.llm-feedback-actions button:hover:not(:disabled) {
+  color: #153f74;
+  background: #e8f0ff;
+}
+
+.llm-feedback-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
 }
 
 .signal-insight-strip {
@@ -2155,6 +2300,15 @@ dd {
 
   .inline-select {
     grid-template-columns: 1fr;
+  }
+
+  .llm-insight-header {
+    display: grid;
+  }
+
+  .llm-insight-header span {
+    max-width: 100%;
+    width: fit-content;
   }
 
   .prompt-preview-header {

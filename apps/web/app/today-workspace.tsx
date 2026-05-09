@@ -44,6 +44,16 @@ export type TodayTask = {
   signal_score: number | null;
   source_type: string | null;
   raw_content: string | null;
+  llm_ai_category: string | null;
+  llm_project_type: string | null;
+  llm_relevance: string | null;
+  llm_priority: string | null;
+  llm_score: number | null;
+  llm_provider: string | null;
+  llm_model: string | null;
+  llm_reason: string | null;
+  llm_risk: string | null;
+  llm_suggested_action: string | null;
   document_quality?: DocumentQuality;
 };
 
@@ -85,6 +95,20 @@ type ArchiveDay = {
 
 type ArchivePayload = {
   days: ArchiveDay[];
+};
+
+type LlmEnrichPayload = {
+  enabled: boolean;
+  processed: number;
+  created: number;
+  cached: number;
+  errors: Array<{ signal_id?: number; error: string }>;
+};
+
+type LlmFeedbackSummary = {
+  total: number;
+  counts: Record<string, number>;
+  helpful_rate: number | null;
 };
 
 type WorkspaceView = "today" | "todayArchive" | "historyArchive";
@@ -146,6 +170,17 @@ type PromptDraft = {
   docsUrl: string;
   extraUrl: string;
   targetFile: string;
+};
+
+type LlmStatus = {
+  enabled: boolean;
+  configured_enabled: boolean;
+  provider: string;
+  base_url_host: string;
+  model: string;
+  has_api_key: boolean;
+  has_model: boolean;
+  missing: string[];
 };
 
 const DOCS_NOT_FOUND = "未发现文档链接，请先从 README 或仓库主页确认";
@@ -487,6 +522,11 @@ export default function TodayWorkspace({
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const [runtimeApiBaseUrl] = useState(apiBaseUrl);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
+  const [llmStatusError, setLlmStatusError] = useState("");
+  const [isEnriching, setIsEnriching] = useState(false);
+  const [llmFeedbackSummary, setLlmFeedbackSummary] = useState<LlmFeedbackSummary | null>(null);
+  const [feedbackBusyTaskId, setFeedbackBusyTaskId] = useState<number | null>(null);
 
   const liveSummary = useMemo(() => buildSummary(tasks), [tasks]);
   const summary = initialSummary && tasks.length === initialTasks.length ? liveSummary : liveSummary;
@@ -538,6 +578,20 @@ export default function TodayWorkspace({
             description: "历史归档默认只读，避免误改旧记录；需要处理时先把单个任务转回今日继续处理。",
             listTitle: "历史归档内容",
           };
+  const llmStateClass = llmStatus?.enabled ? "is-on" : llmStatusError ? "is-error" : "is-off";
+  const llmStateLabel = llmStatus?.enabled ? "已启用" : llmStatusError ? "状态未知" : "未启用";
+  const llmStateDetail = llmStatus
+    ? llmStatus.enabled
+      ? `${llmStatus.model} · ${llmStatus.base_url_host}`
+      : llmStatus.missing.length > 0
+        ? `缺少 ${llmStatus.missing.join(" / ")}`
+        : "LLM 增强未启用"
+    : llmStatusError || "正在读取 LLM 状态...";
+  const canRunLlmEnrichment = Boolean(llmStatus?.enabled) && !isEnriching && !isRefreshing;
+  const llmHelpfulRate =
+    llmFeedbackSummary?.helpful_rate === null || llmFeedbackSummary?.helpful_rate === undefined
+      ? "暂无反馈"
+      : `${Math.round(llmFeedbackSummary.helpful_rate * 100)}% 有帮助`;
 
   const applyTaskUpdate = useCallback((updatedTask: TodayTask) => {
     setTasks((currentTasks) => currentTasks.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
@@ -699,6 +753,74 @@ export default function TodayWorkspace({
     [runtimeApiBaseUrl, syncWorkspaceUrl, viewForArchiveDate],
   );
 
+  const runLlmEnrichment = useCallback(async () => {
+    if (!llmStatus?.enabled) {
+      setError("LLM 增强尚未启用，请先检查 API key、模型和开关配置。");
+      return;
+    }
+
+    setIsEnriching(true);
+    setError("");
+    try {
+      const response = await fetch(`${runtimeApiBaseUrl}/signals/enrich`, {
+        cache: "no-store",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 10 }),
+      });
+      if (!response.ok) {
+        throw new Error(await parseApiError(response));
+      }
+
+      const payload = (await response.json()) as LlmEnrichPayload;
+      if (activeView === "today") {
+        await loadTodayTasks(true);
+      } else if (selectedArchiveDate) {
+        await loadArchiveDate(selectedArchiveDate, { syncUrl: false, view: activeView });
+      }
+
+      const errorSuffix = payload.errors.length > 0 ? `，${payload.errors.length} 个失败` : "";
+      setNotice(`LLM 增强完成：处理 ${payload.processed} 个，新建 ${payload.created} 个，复用缓存 ${payload.cached} 个${errorSuffix}。`);
+    } catch (enrichError) {
+      setError(enrichError instanceof Error ? enrichError.message : "运行 LLM 增强失败。");
+      setNotice("");
+    } finally {
+      setIsEnriching(false);
+    }
+  }, [activeView, llmStatus?.enabled, loadArchiveDate, loadTodayTasks, runtimeApiBaseUrl, selectedArchiveDate]);
+
+  const submitLlmFeedback = useCallback(
+    async (task: TodayTask, feedbackType: "llm_helpful" | "llm_inaccurate" | "llm_vague") => {
+      setFeedbackBusyTaskId(task.id);
+      setError("");
+      try {
+        const response = await fetch(`${runtimeApiBaseUrl}/tasks/${task.id}/llm-feedback`, {
+          cache: "no-store",
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feedback_type: feedbackType }),
+        });
+        if (!response.ok) {
+          throw new Error(await parseApiError(response));
+        }
+
+        const payload = (await response.json()) as { summary: LlmFeedbackSummary };
+        setLlmFeedbackSummary(payload.summary);
+        const labels = {
+          llm_helpful: "有帮助",
+          llm_inaccurate: "不准确",
+          llm_vague: "太空泛",
+        };
+        setNotice(`已记录 LLM 反馈：${labels[feedbackType]}。`);
+      } catch (feedbackError) {
+        setError(feedbackError instanceof Error ? feedbackError.message : "记录 LLM 反馈失败。");
+      } finally {
+        setFeedbackBusyTaskId(null);
+      }
+    },
+    [runtimeApiBaseUrl],
+  );
+
   const runBulkDetection = useCallback(
     async (silent = false) => {
       const detectableCount = tasks.filter(
@@ -739,6 +861,39 @@ export default function TodayWorkspace({
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLlmMeta() {
+      try {
+        const [statusResponse, feedbackResponse] = await Promise.all([
+          fetch(`${runtimeApiBaseUrl}/llm/status`, { cache: "no-store" }),
+          fetch(`${runtimeApiBaseUrl}/llm/feedback-summary`, { cache: "no-store" }),
+        ]);
+        if (!statusResponse.ok) {
+          throw new Error(await parseApiError(statusResponse));
+        }
+        const statusPayload = (await statusResponse.json()) as LlmStatus;
+        const feedbackPayload = feedbackResponse.ok ? ((await feedbackResponse.json()) as LlmFeedbackSummary) : null;
+        if (!cancelled) {
+          setLlmStatus(statusPayload);
+          setLlmFeedbackSummary(feedbackPayload);
+          setLlmStatusError("");
+        }
+      } catch (statusError) {
+        if (!cancelled) {
+          setLlmStatus(null);
+          setLlmStatusError(statusError instanceof Error ? statusError.message : "读取 LLM 状态失败。");
+        }
+      }
+    }
+
+    void loadLlmMeta();
+    return () => {
+      cancelled = true;
+    };
+  }, [runtimeApiBaseUrl]);
 
   useEffect(() => {
     void refreshArchiveDays({ rebuild: true });
@@ -1124,6 +1279,15 @@ export default function TodayWorkspace({
           <strong>知识库路径</strong>
           <p className="break-text">{archivePath}</p>
         </div>
+        <div className={`attention-card llm-status-card ${llmStateClass}`}>
+          <strong>NVIDIA LLM</strong>
+          <p>{llmStateLabel}</p>
+          <span>{llmStateDetail}</span>
+          <small>{llmFeedbackSummary ? `反馈 ${llmFeedbackSummary.total} 条 · ${llmHelpfulRate}` : "反馈统计加载中"}</small>
+          <button disabled={!canRunLlmEnrichment} onClick={() => void runLlmEnrichment()} type="button">
+            {isEnriching ? "增强中..." : "运行 LLM 增强"}
+          </button>
+        </div>
         <div className="attention-card action-card">
           <strong>当前时间</strong>
           <p>{clockText}</p>
@@ -1318,6 +1482,43 @@ export default function TodayWorkspace({
                           <li key={reason}>{reason}</li>
                         ))}
                       </ul>
+                    ) : null}
+
+                    {task.llm_reason || task.llm_risk || task.llm_suggested_action ? (
+                      <div className="llm-insight-panel" aria-label={`${task.title} LLM 增强判断`}>
+                        <div className="llm-insight-header">
+                          <strong>LLM 增强判断</strong>
+                          <span>
+                            {[task.llm_priority, task.llm_ai_category, task.llm_project_type].filter(Boolean).join(" / ") || "已分析"}
+                          </span>
+                        </div>
+                        {task.llm_reason ? <p>{task.llm_reason}</p> : null}
+                        {task.llm_risk ? <p className="llm-risk">风险：{task.llm_risk}</p> : null}
+                        {task.llm_suggested_action ? <p className="llm-action">建议：{task.llm_suggested_action}</p> : null}
+                        <div className="llm-feedback-actions" aria-label={`${task.title} LLM 反馈`}>
+                          <button
+                            disabled={feedbackBusyTaskId === task.id}
+                            onClick={() => void submitLlmFeedback(task, "llm_helpful")}
+                            type="button"
+                          >
+                            有帮助
+                          </button>
+                          <button
+                            disabled={feedbackBusyTaskId === task.id}
+                            onClick={() => void submitLlmFeedback(task, "llm_inaccurate")}
+                            type="button"
+                          >
+                            不准确
+                          </button>
+                          <button
+                            disabled={feedbackBusyTaskId === task.id}
+                            onClick={() => void submitLlmFeedback(task, "llm_vague")}
+                            type="button"
+                          >
+                            太空泛
+                          </button>
+                        </div>
+                      </div>
                     ) : null}
 
                     <div className="signal-insight-strip">
