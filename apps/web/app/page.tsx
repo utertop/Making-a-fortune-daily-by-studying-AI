@@ -21,7 +21,7 @@ async function getTasks(path: string, fallbackError: string): Promise<TodayTasks
         tasks: [],
         summary: null,
         allowed_statuses: [],
-        error: `API returned ${response.status}`,
+        error: `接口返回 ${response.status}`,
       };
     }
 
@@ -43,7 +43,7 @@ async function getInitialWorkspace(searchParams: SearchParams): Promise<
   const date = firstSearchParam(searchParams.date);
 
   if (view === "archive" && date && archiveDatePattern.test(date)) {
-    const payload = await getTasks(`/tasks/archive?date=${encodeURIComponent(date)}&limit=50`, "Unable to load archive tasks");
+    const payload = await getTasks(`/tasks/archive?date=${encodeURIComponent(date)}&limit=50`, "读取归档任务失败");
     return {
       ...payload,
       selectedArchiveDate: date,
@@ -51,7 +51,7 @@ async function getInitialWorkspace(searchParams: SearchParams): Promise<
     };
   }
 
-  const payload = await getTasks("/tasks/today?limit=10", "Unable to load today's tasks");
+  const payload = await getTasks("/tasks/today?limit=10", "读取今日候选失败");
   return {
     ...payload,
     selectedArchiveDate: null,

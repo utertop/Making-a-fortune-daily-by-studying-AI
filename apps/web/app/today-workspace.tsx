@@ -155,11 +155,17 @@ const statusLabels: Record<TaskStatus, string> = {
   pending: "待处理",
   pushed: "已推送",
   selected: "已选择",
-  draft_created: "草稿已生成",
-  review_pending: "待审核",
-  documented: "已归档",
-  archived: "已收起",
+  draft_created: "已生成草稿",
+  review_pending: "待确认",
+  documented: "已入库",
+  archived: "已归档",
   ignored: "已跳过",
+};
+
+const documentQualityLabels: Record<DocumentQuality["status"], string> = {
+  pass: "通过",
+  pass_with_warnings: "有提醒",
+  needs_work: "需修改",
 };
 
 const ignoreReasonOptions = ["相关性不足", "重复主题", "暂不值得深挖", "资料不足", "今天先跳过"];
@@ -312,7 +318,7 @@ async function parseApiError(response: Response): Promise<string> {
   } catch {
     // Keep the fallback below.
   }
-  return `API 返回 ${response.status}`;
+  return `接口返回 ${response.status}`;
 }
 
 function firstNonEmpty(values: Array<string | null | undefined>): string | null {
@@ -372,7 +378,7 @@ function buildDeepResearchPrompt(task: TodayTask, promptDraft?: PromptDraft) {
 function buildHeroContent(summary: TodaySummary, completionPercent: number) {
   if (summary.is_complete && summary.actionable_count > 0) {
     return {
-      eyebrow: "TODAY COMPLETE",
+      eyebrow: "今日完成",
       title: "今天的知识雷达已经收工",
       summary: "候选信号已经处理完。现在可以复盘文档质量，或者把精力留给明天的新信号。",
       chips: [`已处理 ${summary.done_count}/${summary.actionable_count}`, "可归档", `完成度 ${completionPercent}%`],
@@ -381,42 +387,42 @@ function buildHeroContent(summary: TodaySummary, completionPercent: number) {
 
   if (summary.review_pending > 0) {
     return {
-      eyebrow: "FOCUS: REVIEW",
+      eyebrow: "重点：确认归档",
       title: `${summary.review_pending} 篇草稿等待确认`,
       summary: "优先检查已经写完的 Markdown，把有价值的内容确认入库，今天的闭环就会轻很多。",
-      chips: [`待审核 ${summary.review_pending}`, `已有草稿 ${summary.draft_created}`, `完成度 ${completionPercent}%`],
+      chips: [`待确认 ${summary.review_pending}`, `已有草稿 ${summary.draft_created}`, `完成度 ${completionPercent}%`],
     };
   }
 
   if (summary.draft_created > 0) {
     return {
-      eyebrow: "FOCUS: DRAFTS",
+      eyebrow: "重点：完善草稿",
       title: `${summary.draft_created} 个项目已有 Markdown 草稿`,
       summary: "从草稿开始深挖会更快。打开 Prompt，补齐资料来源，再把文件写到知识库。",
-      chips: [`草稿 ${summary.draft_created}`, `待审核 ${summary.review_pending}`, `完成度 ${completionPercent}%`],
+      chips: [`草稿 ${summary.draft_created}`, `待确认 ${summary.review_pending}`, `完成度 ${completionPercent}%`],
     };
   }
 
   if (summary.selected > 0) {
     return {
-      eyebrow: "FOCUS: FOLLOW UP",
+      eyebrow: "重点：继续深挖",
       title: `${summary.selected} 个信号已经被选中`,
       summary: "下一步是生成 Markdown 草稿，或复制深挖 Prompt 交给 Codex / Antigravity 继续研究。",
-      chips: [`已选择 ${summary.selected}`, `待审核 ${summary.review_pending}`, `完成度 ${completionPercent}%`],
+      chips: [`已选择 ${summary.selected}`, `待确认 ${summary.review_pending}`, `完成度 ${completionPercent}%`],
     };
   }
 
   return {
-    eyebrow: "V0.1 LOCAL WORKSPACE",
+    eyebrow: "本地知识工作台",
     title: "AI Signal Radar",
     summary: "从 GitHub 与 RSS 中筛选值得学习的 AI 信号，选择少量项目深挖，并沉淀为本地 Markdown 知识库。",
-    chips: [`待处理 ${summary.pending + summary.pushed}`, `待审核 ${summary.review_pending}`, `完成度 ${completionPercent}%`],
+    chips: [`待处理 ${summary.pending + summary.pushed}`, `待确认 ${summary.review_pending}`, `完成度 ${completionPercent}%`],
   };
 }
 
 function nextStepLabel(task: TodayTask) {
   if (task.status === "pending") {
-    return "先推送或选择";
+    return "选择是否深挖";
   }
   if (task.status === "pushed") {
     return "选择是否深挖";
@@ -425,13 +431,13 @@ function nextStepLabel(task: TodayTask) {
     return "生成草稿";
   }
   if (task.status === "draft_created") {
-    return "编辑 Markdown";
+    return "检测或确认草稿";
   }
   if (task.status === "review_pending") {
     return "确认归档";
   }
   if (task.status === "documented") {
-    return "已完成";
+    return "已入库";
   }
   if (task.status === "ignored") {
     return "已跳过";
@@ -477,6 +483,7 @@ export default function TodayWorkspace({
   const [documentDrafts, setDocumentDrafts] = useState<Record<number, DocumentDraft>>({});
   const [documentQualities, setDocumentQualities] = useState<Record<number, DocumentQuality>>({});
   const [ignoreReasons, setIgnoreReasons] = useState<Record<number, string>>({});
+  const [editableHistoryTaskIds, setEditableHistoryTaskIds] = useState<Set<number>>(() => new Set());
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const [runtimeApiBaseUrl] = useState(apiBaseUrl);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -489,18 +496,48 @@ export default function TodayWorkspace({
   const hero = buildHeroContent(summary, completionPercent);
   const today = currentTime
     ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "full", timeZone: "Asia/Shanghai" }).format(currentTime)
-    : "加载当前日期...";
+    : "正在读取当前日期...";
   const clockText = currentTime
     ? new Intl.DateTimeFormat("zh-CN", {
         dateStyle: "medium",
         timeStyle: "medium",
         timeZone: "Asia/Shanghai",
       }).format(currentTime)
-    : "同步中...";
+    : "同步时钟中...";
   const archiveDate = currentTime ? formatShanghaiDate(currentTime) : "";
   const [archiveYear, archiveMonth] = archiveDate ? archiveDate.split("-") : ["YYYY", "MM"];
   const archivePath = archiveDate ? `knowledge-base/daily/${archiveYear}/${archiveMonth}/${archiveDate}/` : "knowledge-base/daily/YYYY/MM/YYYY-MM-DD/";
   const latestHistoricalArchiveDate = archiveDays.find((day) => day.date !== archiveDate)?.date ?? null;
+  const selectedArchiveDay = archiveDays.find((day) => day.date === selectedArchiveDate) ?? null;
+  const isArchiveView = activeView !== "today";
+  const isHistoryArchive = activeView === "historyArchive";
+  const archiveSummaryDate = selectedArchiveDate ?? archiveDate;
+  const archiveSummaryTaskCount = selectedArchiveDay?.task_count ?? summary.total;
+  const archiveSummaryDoneCount = selectedArchiveDay?.done_count ?? summary.done_count;
+  const archiveSummaryDocumentCount = selectedArchiveDay?.document_count ?? 0;
+  const archiveSummaryPushCount = selectedArchiveDay?.push_count ?? 0;
+  const archiveSummaryLatest = formatArchiveTime(selectedArchiveDay?.latest_at ?? null);
+  const viewCopy =
+    activeView === "today"
+      ? {
+          eyebrow: "今日候选",
+          title: "今日候选工作台",
+          description: "这里展示今天仍在处理的候选信号，可以刷新、深挖、生成草稿并确认入库。",
+          listTitle: "今日候选信号",
+        }
+      : activeView === "todayArchive"
+        ? {
+            eyebrow: "今日归档",
+            title: `${archiveSummaryDate || "今日"} 归档快照`,
+            description: "这里展示今天已经进入归档索引的候选、文档和推送记录，仍可继续处理当天任务。",
+            listTitle: "今日归档内容",
+          }
+        : {
+            eyebrow: "历史归档",
+            title: `${archiveSummaryDate || "历史日期"} 归档快照`,
+            description: "历史归档默认只读，避免误改旧记录；需要处理时先把单个任务转回今日继续处理。",
+            listTitle: "历史归档内容",
+          };
 
   const applyTaskUpdate = useCallback((updatedTask: TodayTask) => {
     setTasks((currentTasks) => currentTasks.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
@@ -555,7 +592,7 @@ export default function TodayWorkspace({
       const payload = (await response.json()) as ArchivePayload;
       setArchiveDays(payload.days);
     } catch (archiveError) {
-      setError(archiveError instanceof Error ? archiveError.message : "Unable to load archives.");
+      setError(archiveError instanceof Error ? archiveError.message : "读取归档目录失败。");
     }
   }, [runtimeApiBaseUrl]);
 
@@ -577,16 +614,17 @@ export default function TodayWorkspace({
         setAllowedStatuses(payload.allowed_statuses);
         setSelectedArchiveDate(null);
         setActiveView("today");
+        setEditableHistoryTaskIds(new Set());
         if (options?.syncUrl) {
           syncWorkspaceUrl("today", undefined, options.replaceUrl);
         }
         void refreshArchiveDays();
         if (!silent) {
-          setNotice("今日任务已刷新。");
+          setNotice("今日候选已读取。");
         }
       } catch (refreshError) {
         if (!silent) {
-          setError(refreshError instanceof Error ? refreshError.message : "刷新今日任务失败。");
+          setError(refreshError instanceof Error ? refreshError.message : "读取今日候选失败。");
           setNotice("");
         }
       } finally {
@@ -616,6 +654,7 @@ export default function TodayWorkspace({
       setAllowedStatuses(payload.allowed_statuses);
       setSelectedArchiveDate(null);
       setActiveView("today");
+      setEditableHistoryTaskIds(new Set());
       syncWorkspaceUrl("today");
       void refreshArchiveDays({ rebuild: true });
       setNotice("今日候选已刷新。");
@@ -643,6 +682,7 @@ export default function TodayWorkspace({
         setTasks(payload.tasks);
         setAllowedStatuses(payload.allowed_statuses);
         setSelectedArchiveDate(archiveDate);
+        setEditableHistoryTaskIds(new Set());
         const nextView = options?.view ?? viewForArchiveDate(archiveDate);
         setActiveView(nextView);
         if (options?.syncUrl !== false) {
@@ -650,7 +690,7 @@ export default function TodayWorkspace({
         }
         setNotice(`已加载 ${archiveDate} 归档。`);
       } catch (archiveError) {
-        setError(archiveError instanceof Error ? archiveError.message : "Unable to load archive day.");
+        setError(archiveError instanceof Error ? archiveError.message : "读取归档日期失败。");
         setNotice("");
       } finally {
         setIsRefreshing(false);
@@ -847,7 +887,7 @@ export default function TodayWorkspace({
         ...currentQualities,
         [task.id]: payload.document_quality,
       }));
-      setNotice(`Markdown 质量检查完成：${payload.document_quality.status}，${payload.document_quality.score} 分。`);
+      setNotice(`Markdown 质量检查完成：${documentQualityLabels[payload.document_quality.status]}，${payload.document_quality.score} 分。`);
     } catch (qualityError) {
       setError(qualityError instanceof Error ? qualityError.message : "检查 Markdown 质量失败。");
     } finally {
@@ -903,7 +943,7 @@ export default function TodayWorkspace({
         }));
       }
       setDocumentTaskId(null);
-      setNotice(`${task.title} 已确认归档。`);
+      setNotice(`${task.title} 已确认入库。`);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "确认归档失败。");
     } finally {
@@ -916,13 +956,22 @@ export default function TodayWorkspace({
     await copyText(buildDeepResearchPrompt(task, promptDraft), "深挖 Prompt 已复制。");
   }
 
+  function continueHistoryTask(task: TodayTask) {
+    setEditableHistoryTaskIds((currentTaskIds) => {
+      const nextTaskIds = new Set(currentTaskIds);
+      nextTaskIds.add(task.id);
+      return nextTaskIds;
+    });
+    setNotice(`${task.title} 已转回今日处理模式，可以继续操作这张卡。`);
+  }
+
   return (
     <main className="page-shell">
       <div className="workspace-layout">
-        <aside className="archive-sidebar" aria-label="Archive directory">
+        <aside className="archive-sidebar" aria-label="归档目录">
           <div className="archive-sidebar-header">
             <div>
-              <p className="panel-label">Archive</p>
+              <p className="panel-label">归档</p>
               <h2>归档目录</h2>
             </div>
             <button disabled={isRefreshing} onClick={() => void refreshArchiveDays({ rebuild: true })} type="button">
@@ -940,7 +989,7 @@ export default function TodayWorkspace({
           </div>
 
           {archiveGroups.length === 0 ? (
-            <div className="archive-empty">服务运行后生成的推送和 Markdown 会出现在这里。</div>
+            <div className="archive-empty">服务运行后生成的候选、推送和 Markdown 会出现在这里。</div>
           ) : (
             <div className="archive-tree">
               {archiveGroups.map((monthGroup, monthIndex) => (
@@ -964,7 +1013,7 @@ export default function TodayWorkspace({
                               key={day.date}
                               onClick={() => void loadArchiveDate(day.date, { view: viewForArchiveDate(day.date) })}
                               type="button"
-                              title={`${day.date}: ${day.task_count} tasks / ${day.document_count} docs / ${day.push_count} pushes`}
+                              title={`${day.date}: ${day.task_count} 个任务 / ${day.document_count} 篇文档 / ${day.push_count} 次推送`}
                             >
                               <span className="archive-day-main">
                                 <span className="archive-day-date">{day.date.slice(5)}</span>
@@ -989,7 +1038,7 @@ export default function TodayWorkspace({
         </aside>
 
         <div className="workspace-main">
-          <nav className="view-switcher" aria-label="Workspace view">
+          <nav className="view-switcher" aria-label="工作台视图">
             <button className={activeView === "today" ? "is-active" : ""} disabled={isRefreshing} onClick={() => void loadTodayTasks(false, { syncUrl: true })} type="button">
               今日候选
             </button>
@@ -1015,6 +1064,22 @@ export default function TodayWorkspace({
               历史归档
             </button>
           </nav>
+          <section className={`view-context-strip ${isArchiveView ? "is-archive" : "is-today"}`} aria-label="当前视图">
+            <div>
+              <span>{viewCopy.eyebrow}</span>
+              <strong>{viewCopy.title}</strong>
+              <p>{viewCopy.description}</p>
+            </div>
+            {isArchiveView ? (
+              <div className="archive-summary-counters" aria-label="归档日摘要">
+                <span>任务 {archiveSummaryTaskCount}</span>
+                <span>完成 {archiveSummaryDoneCount}</span>
+                <span>文档 {archiveSummaryDocumentCount}</span>
+                <span>推送 {archiveSummaryPushCount}</span>
+                {archiveSummaryLatest ? <span>最近 {archiveSummaryLatest}</span> : null}
+              </div>
+            ) : null}
+          </section>
       <header className="workspace-header">
         <div className="workspace-hero">
           <div className="workspace-hero-copy">
@@ -1043,7 +1108,7 @@ export default function TodayWorkspace({
             </div>
             <div className="hero-stat-card">
               <span>{summary.review_pending}</span>
-              <strong>待审核文档</strong>
+              <strong>待确认文档</strong>
               <p>优先确认这些内容，闭环最快。</p>
             </div>
           </div>
@@ -1105,8 +1170,8 @@ export default function TodayWorkspace({
       <section className="signals-section">
         <div className="section-heading">
           <div>
-            <p className="panel-label">Top Signals</p>
-            <h2>今日候选信号</h2>
+            <p className="panel-label">候选信号</p>
+            <h2>{viewCopy.listTitle}</h2>
           </div>
           {initialError ? <p className="load-error">{initialError}</p> : null}
         </div>
@@ -1130,18 +1195,18 @@ export default function TodayWorkspace({
           </div>
           <div>
             <span>{summary.review_pending}</span>
-            <p>待审核</p>
+            <p>待确认</p>
           </div>
           <div>
             <span>{summary.documented}</span>
-            <p>已归档</p>
+            <p>已入库</p>
           </div>
         </div>
 
         {tasks.length === 0 ? (
           <div className="empty-state">
-            <h2>还没有今日任务</h2>
-            <p>先运行 daily flow 或刷新任务。API 可用后，这里会显示今日 Top Signals。</p>
+            <h2>{isArchiveView ? "这个归档日暂无内容" : "还没有今日候选"}</h2>
+            <p>{isArchiveView ? "该日期还没有候选、推送或文档记录。" : "刷新今日候选后，这里会显示需要处理的信号。"}</p>
           </div>
         ) : (
           <div className="signal-list">
@@ -1155,25 +1220,44 @@ export default function TodayWorkspace({
               const documentQuality = documentQualities[task.id] ?? task.document_quality;
               const isBusy = busyTaskId === task.id;
               const isPromptPreviewOpen = promptPreviewTaskId === task.id;
-              const canPush = allowedStatusSet.has("pushed") && task.status === "pending";
-              const canSelect = allowedStatusSet.has("selected") && (task.status === "pending" || task.status === "pushed");
+              const isHistoryTaskReadOnly = isHistoryArchive && !editableHistoryTaskIds.has(task.id);
+              const canEditTask = !isHistoryTaskReadOnly;
+              const canPush = canEditTask && allowedStatusSet.has("pushed") && task.status === "pending";
+              const canSelect = canEditTask && allowedStatusSet.has("selected") && (task.status === "pending" || task.status === "pushed");
               const canCreateDraft =
-                task.status === "selected" || task.status === "draft_created" || task.status === "review_pending";
+                canEditTask && (task.status === "selected" || task.status === "draft_created" || task.status === "review_pending");
               const canDetect =
-                Boolean(task.target_doc_path) && !["documented", "archived", "ignored"].includes(task.status);
+                canEditTask && Boolean(task.target_doc_path) && !["documented", "archived", "ignored"].includes(task.status);
               const canQualityCheck =
+                canEditTask &&
                 Boolean(task.target_doc_path ?? task.document_path ?? draft.path) &&
                 !["archived", "ignored"].includes(task.status);
               const canConfirmDocument =
-                Boolean(task.target_doc_path) && !["documented", "archived", "ignored"].includes(task.status);
+                canEditTask && Boolean(task.target_doc_path) && !["documented", "archived", "ignored"].includes(task.status);
               const canPreviewPrompt =
+                canEditTask &&
                 Boolean(task.target_doc_path) &&
                 (task.status === "selected" || task.status === "draft_created" || task.status === "review_pending");
               const canIgnore =
-                allowedStatusSet.has("ignored") && !["documented", "archived", "ignored"].includes(task.status);
-              const canArchive = allowedStatusSet.has("archived") && (task.status === "documented" || task.status === "ignored");
+                canEditTask && allowedStatusSet.has("ignored") && !["documented", "archived", "ignored"].includes(task.status);
+              const canArchive = canEditTask && allowedStatusSet.has("archived") && (task.status === "documented" || task.status === "ignored");
+              const isDocumentFormOpen = documentTaskId === task.id;
+              const hasTaskActions =
+                canPush ||
+                canSelect ||
+                canCreateDraft ||
+                canPreviewPrompt ||
+                canDetect ||
+                canQualityCheck ||
+                canConfirmDocument ||
+                canIgnore ||
+                canArchive ||
+                isDocumentFormOpen;
+              const hasPrimaryActions = canSelect || canCreateDraft || canPreviewPrompt || canConfirmDocument || isDocumentFormOpen;
+              const hasUtilityActions = canPush || canDetect || canQualityCheck;
+              const hasLowPriorityActions = canIgnore || canArchive;
               const ignoreReason = ignoreReasons[task.id] ?? "相关性不足";
-              const isWorkspaceOpen = isPromptPreviewOpen || documentTaskId === task.id;
+              const isWorkspaceOpen = canEditTask && (isPromptPreviewOpen || isDocumentFormOpen);
               const isTerminalCard = task.status === "documented" || task.status === "archived" || task.status === "ignored";
               const progressHint = task.last_detected_at ? `最近检测：${formatDateTime(task.last_detected_at)}` : "";
 
@@ -1181,7 +1265,7 @@ export default function TodayWorkspace({
                 <article
                   className={`signal-card ${isWorkspaceOpen ? "signal-card-expanded" : "signal-card-collapsed"} ${
                     isTerminalCard ? "signal-card-terminal" : "signal-card-active"
-                  }`}
+                  } ${isHistoryTaskReadOnly ? "signal-card-readonly" : ""}`}
                   key={task.id}
                 >
                   <div className="signal-rank">{index + 1}</div>
@@ -1193,7 +1277,7 @@ export default function TodayWorkspace({
                             {task.title}
                           </a>
                         </h3>
-                        <p className="signal-summary">{task.summary ?? "暂无摘要"}</p>
+                        <p className="signal-summary">{task.summary ?? "暂无简介"}</p>
                       </div>
                       <div className="signal-status-stack">
                         <span className={`status-badge status-${task.status}`}>{statusLabels[task.status] ?? task.status}</span>
@@ -1203,27 +1287,27 @@ export default function TodayWorkspace({
 
                     <dl className="metric-grid">
                       <div className="metric-card metric-card-score">
-                        <dt>Score</dt>
+                        <dt>评分</dt>
                         <dd>{task.signal_score ?? 0}</dd>
                       </div>
                       <div>
-                        <dt>Stars</dt>
+                        <dt>星标</dt>
                         <dd>{formatNumber(details.latest_stars)}</dd>
                       </div>
                       <div className="metric-card metric-card-delta">
-                        <dt>Delta</dt>
+                        <dt>增长</dt>
                         <dd>{formatDelta(details.stars_delta)}</dd>
                       </div>
                       <div>
-                        <dt>Forks</dt>
+                        <dt>Fork</dt>
                         <dd>{formatNumber(details.latest_forks)}</dd>
                       </div>
                       <div>
-                        <dt>Language</dt>
+                        <dt>语言</dt>
                         <dd>{details.language ?? "-"}</dd>
                       </div>
                       <div>
-                        <dt>License</dt>
+                        <dt>许可证</dt>
                         <dd>{details.license ?? "-"}</dd>
                       </div>
                     </dl>
@@ -1263,7 +1347,7 @@ export default function TodayWorkspace({
                       {documentQuality ? (
                         <div className={`quality-panel quality-${documentQuality.status}`}>
                           <div>
-                            <strong>Markdown 质量：{documentQuality.status}</strong>
+                            <strong>Markdown 质量：{documentQualityLabels[documentQuality.status]}</strong>
                             <span>{documentQuality.score} 分</span>
                           </div>
                           {documentQuality.issues.length > 0 ? (
@@ -1276,10 +1360,25 @@ export default function TodayWorkspace({
                       ) : null}
                     </div>
 
+                    {isHistoryTaskReadOnly ? (
+                      <div className="archive-readonly-panel">
+                        <div>
+                          <strong>历史归档只读</strong>
+                          <p>这张卡属于历史归档，默认隐藏会改动状态或文档的操作。</p>
+                          <span className="archive-readonly-meta">
+                            {selectedArchiveDate ?? "历史日期"} · {statusLabels[task.status] ?? task.status}
+                          </span>
+                        </div>
+                        <button className="button-secondary" disabled={isBusy} onClick={() => continueHistoryTask(task)} type="button">
+                          转回今日继续处理
+                        </button>
+                      </div>
+                    ) : null}
+
                     <div className={`signal-workspace-shell ${isWorkspaceOpen ? "is-open" : "is-closed"}`}>
                       <div className="signal-workspace-summary">
                         <div>
-                          <span className="signal-workspace-kicker">Workspace</span>
+                          <span className="signal-workspace-kicker">工作区</span>
                           <strong>{isWorkspaceOpen ? "正在处理这个信号" : "打开 Prompt 或归档表单后继续处理"}</strong>
                         </div>
                         <span className="signal-workspace-state">{isWorkspaceOpen ? "展开" : "待操作"}</span>
@@ -1289,11 +1388,11 @@ export default function TodayWorkspace({
                         <div className="signal-workspace">
                           {isPromptPreviewOpen ? (
                             <div className="prompt-preview-panel">
-                              <div className="panel-kicker">Deep Prompt</div>
+                              <div className="panel-kicker">深挖 Prompt</div>
                               <div className="prompt-preview-header">
                                 <div>
                                   <strong>深挖 Prompt 预览</strong>
-                                  <p>复制后交给 Codex / Antigravity，用于生成或完善项目知识档案。</p>
+                                  <p>复制给 Codex / Antigravity 后继续研究，并补齐事实来源。</p>
                                 </div>
                                 <div className="prompt-preview-actions">
                                   <button onClick={() => void copyDeepResearchPrompt(task)} type="button">
@@ -1309,25 +1408,25 @@ export default function TodayWorkspace({
                               </div>
                               <div className="prompt-source-grid">
                                 <div className="prompt-source-card">
-                                  <span>Repo</span>
+                                  <span>仓库</span>
                                   <strong>{promptDraft.repoUrl}</strong>
                                 </div>
                                 <div className="prompt-source-card">
-                                  <span>Docs</span>
+                                  <span>文档</span>
                                   <strong>{promptDraft.docsUrl}</strong>
                                 </div>
                                 <div className="prompt-source-card">
-                                  <span>Extra Links</span>
+                                  <span>补充链接</span>
                                   <strong>{promptDraft.extraUrl}</strong>
                                 </div>
                                 <div className="prompt-source-card">
-                                  <span>Target File</span>
+                                  <span>目标文件</span>
                                   <strong>{promptDraft.targetFile}</strong>
                                 </div>
                               </div>
                               <div className="prompt-edit-grid">
                                 <label>
-                                  <span>Docs</span>
+                                  <span>文档链接</span>
                                   <input
                                     onChange={(event) => updatePromptDraft(task, { docsUrl: event.target.value })}
                                     type="text"
@@ -1335,7 +1434,7 @@ export default function TodayWorkspace({
                                   />
                                 </label>
                                 <label>
-                                  <span>Extra Links</span>
+                                  <span>补充链接</span>
                                   <input
                                     onChange={(event) => updatePromptDraft(task, { extraUrl: event.target.value })}
                                     type="text"
@@ -1353,9 +1452,9 @@ export default function TodayWorkspace({
                             </div>
                           ) : null}
 
-                          {documentTaskId === task.id ? (
-                            <div className="document-form" aria-label={`${task.title} document form`}>
-                              <div className="panel-kicker">Submit Record</div>
+                          {isDocumentFormOpen ? (
+                            <div className="document-form" aria-label={`${task.title} 归档表单`}>
+                              <div className="panel-kicker">归档信息</div>
                               <label>
                                 <span>文档标题</span>
                                 <input
@@ -1383,7 +1482,7 @@ export default function TodayWorkspace({
                               </label>
                               <div className="document-form-grid">
                                 <label>
-                                  <span>Tags</span>
+                                  <span>标签</span>
                                   <input
                                     onChange={(event) => updateDocumentDraft(task.id, { tags: event.target.value })}
                                     type="text"
@@ -1391,14 +1490,14 @@ export default function TodayWorkspace({
                                   />
                                 </label>
                                 <label>
-                                  <span>Confidence</span>
+                                  <span>置信度</span>
                                   <select
                                     onChange={(event) => updateDocumentDraft(task.id, { confidence: event.target.value })}
                                     value={draft.confidence}
                                   >
-                                    <option value="high">high</option>
-                                    <option value="medium">medium</option>
-                                    <option value="low">low</option>
+                                    <option value="high">高</option>
+                                    <option value="medium">中</option>
+                                    <option value="low">低</option>
                                   </select>
                                 </label>
                               </div>
@@ -1408,104 +1507,126 @@ export default function TodayWorkspace({
                       ) : null}
                     </div>
 
-                    {canIgnore ? (
-                      <div className="inline-select-row">
-                        <label className="inline-select">
-                          <span>跳过原因</span>
-                          <select
-                            onChange={(event) =>
-                              setIgnoreReasons((currentReasons) => ({ ...currentReasons, [task.id]: event.target.value }))
-                            }
-                            value={ignoreReason}
-                          >
-                            {ignoreReasonOptions.map((reason) => (
-                              <option key={reason} value={reason}>
-                                {reason}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                    {hasTaskActions ? (
+                      <div className="task-actions" aria-label={`${task.title} 任务操作`}>
+                        {hasPrimaryActions ? (
+                          <div className="task-action-group task-action-primary" aria-label="主流程操作">
+                            <span className="task-action-label">下一步</span>
+                            <div className="task-action-buttons">
+                              {canSelect ? (
+                                <button className="button-primary" disabled={isBusy} onClick={() => void updateTaskStatus(task, "selected")} type="button">
+                                  选择是否深挖
+                                </button>
+                              ) : null}
+                              {canCreateDraft ? (
+                                <button className="button-primary" disabled={isBusy} onClick={() => void generateDraft(task)} type="button">
+                                  生成 Markdown 草稿
+                                </button>
+                              ) : null}
+                              {canPreviewPrompt ? (
+                                <button
+                                  className="button-primary"
+                                  disabled={isBusy}
+                                  onClick={() => {
+                                    setPromptDrafts((currentDrafts) => ({
+                                      ...currentDrafts,
+                                      [task.id]: currentDrafts[task.id] ?? buildPromptDraft(task),
+                                    }));
+                                    setPromptPreviewTaskId(isPromptPreviewOpen ? null : task.id);
+                                  }}
+                                  type="button"
+                                >
+                                  深挖 Prompt
+                                </button>
+                              ) : null}
+                              {canConfirmDocument && !isDocumentFormOpen ? (
+                                <button className="button-primary" disabled={isBusy} onClick={() => void submitDocument(task)} type="button">
+                                  确认归档
+                                </button>
+                              ) : null}
+                              {canConfirmDocument ? (
+                                <button
+                                  className="button-secondary"
+                                  disabled={isBusy}
+                                  onClick={() => setDocumentTaskId(isDocumentFormOpen ? null : task.id)}
+                                  type="button"
+                                >
+                                  {isDocumentFormOpen ? "收起归档表单" : "编辑归档信息"}
+                                </button>
+                              ) : null}
+                              {isDocumentFormOpen ? (
+                                <button className="button-primary" disabled={isBusy} onClick={() => void submitDocument(task)} type="button">
+                                  提交文档记录
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {hasUtilityActions ? (
+                          <div className="task-action-group task-action-utility" aria-label="辅助操作">
+                            <span className="task-action-label">辅助</span>
+                            <div className="task-action-buttons">
+                              {canPush ? (
+                                <button className="button-secondary" disabled={isBusy} onClick={() => void updateTaskStatus(task, "pushed")} type="button">
+                                  标记已推送
+                                </button>
+                              ) : null}
+                              {canDetect ? (
+                                <button className="button-secondary" disabled={isBusy} onClick={() => void detectTaskDocument(task)} type="button">
+                                  检测 Markdown
+                                </button>
+                              ) : null}
+                              {canQualityCheck ? (
+                                <button className="button-secondary" disabled={isBusy} onClick={() => void checkDocumentQuality(task)} type="button">
+                                  检查质量
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {hasLowPriorityActions ? (
+                          <div className="task-action-group task-action-low" aria-label="低频处理">
+                            <span className="task-action-label">低频</span>
+                            <div className="task-action-buttons">
+                              {canIgnore ? (
+                                <label className="inline-select">
+                                  <span>跳过原因</span>
+                                  <select
+                                    onChange={(event) =>
+                                      setIgnoreReasons((currentReasons) => ({ ...currentReasons, [task.id]: event.target.value }))
+                                    }
+                                    value={ignoreReason}
+                                  >
+                                    {ignoreReasonOptions.map((reason) => (
+                                      <option key={reason} value={reason}>
+                                        {reason}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </label>
+                              ) : null}
+                              {canIgnore ? (
+                                <button
+                                  className="button-danger-subtle"
+                                  disabled={isBusy}
+                                  onClick={() => void updateTaskStatus(task, "ignored", { ignored_reason: ignoreReason })}
+                                  type="button"
+                                >
+                                  跳过
+                                </button>
+                              ) : null}
+                              {canArchive ? (
+                                <button className="button-subtle" disabled={isBusy} onClick={() => void updateTaskStatus(task, "archived")} type="button">
+                                  收起
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
-
-                    <div className="task-actions" aria-label={`${task.title} task actions`}>
-                      {canPush ? (
-                        <button className="button-secondary" disabled={isBusy} onClick={() => void updateTaskStatus(task, "pushed")} type="button">
-                          标记已推送
-                        </button>
-                      ) : null}
-                      {canSelect ? (
-                        <button className="button-primary" disabled={isBusy} onClick={() => void updateTaskStatus(task, "selected")} type="button">
-                          选择深挖
-                        </button>
-                      ) : null}
-                      {canCreateDraft ? (
-                        <button className="button-primary" disabled={isBusy} onClick={() => void generateDraft(task)} type="button">
-                          生成 Markdown 草稿
-                        </button>
-                      ) : null}
-                      {canPreviewPrompt ? (
-                        <button
-                          className="button-primary"
-                          disabled={isBusy}
-                          onClick={() => {
-                            setPromptDrafts((currentDrafts) => ({
-                              ...currentDrafts,
-                              [task.id]: currentDrafts[task.id] ?? buildPromptDraft(task),
-                            }));
-                            setPromptPreviewTaskId(isPromptPreviewOpen ? null : task.id);
-                          }}
-                          type="button"
-                        >
-                          深挖 Prompt
-                        </button>
-                      ) : null}
-                      {canDetect ? (
-                        <button className="button-secondary" disabled={isBusy} onClick={() => void detectTaskDocument(task)} type="button">
-                          检测 Markdown
-                        </button>
-                      ) : null}
-                      {canQualityCheck ? (
-                        <button className="button-secondary" disabled={isBusy} onClick={() => void checkDocumentQuality(task)} type="button">
-                          检查质量
-                        </button>
-                      ) : null}
-                      {canConfirmDocument ? (
-                        <button className="button-primary" disabled={isBusy} onClick={() => void submitDocument(task)} type="button">
-                          确认归档
-                        </button>
-                      ) : null}
-                      {canConfirmDocument ? (
-                        <button
-                          className="button-secondary"
-                          disabled={isBusy}
-                          onClick={() => setDocumentTaskId(documentTaskId === task.id ? null : task.id)}
-                          type="button"
-                        >
-                          {documentTaskId === task.id ? "收起归档表单" : "编辑归档信息"}
-                        </button>
-                      ) : null}
-                      {documentTaskId === task.id ? (
-                        <button className="button-primary" disabled={isBusy} onClick={() => void submitDocument(task)} type="button">
-                          提交文档记录
-                        </button>
-                      ) : null}
-                      {canIgnore ? (
-                        <button
-                          className="button-subtle"
-                          disabled={isBusy}
-                          onClick={() => void updateTaskStatus(task, "ignored", { ignored_reason: ignoreReason })}
-                          type="button"
-                        >
-                          跳过
-                        </button>
-                      ) : null}
-                      {canArchive ? (
-                        <button className="button-subtle" disabled={isBusy} onClick={() => void updateTaskStatus(task, "archived")} type="button">
-                          收起
-                        </button>
-                      ) : null}
-                    </div>
                   </div>
                 </article>
               );
