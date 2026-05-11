@@ -5,7 +5,7 @@ import json
 import re
 from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from .config import KNOWLEDGE_BASE_DIR
 from .db import get_connection, init_database
@@ -307,6 +307,24 @@ def count_rows(table: str) -> int:
 LLM_FEEDBACK_TYPES = {"llm_helpful", "llm_inaccurate", "llm_vague"}
 
 
+def _empty_llm_feedback_counts() -> dict[str, int]:
+    return {feedback_type: 0 for feedback_type in sorted(LLM_FEEDBACK_TYPES)}
+
+
+def _decode_feedback_comment(value: Optional[str]) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _rate(part: int, total: int) -> Optional[float]:
+    return round(part / total, 3) if total else None
+
+
 def record_llm_feedback(task_id: int, feedback_type: str) -> dict[str, Any]:
     if feedback_type not in LLM_FEEDBACK_TYPES:
         raise ValueError(f"Unsupported LLM feedback type: {feedback_type}")
@@ -356,22 +374,102 @@ def record_llm_feedback(task_id: int, feedback_type: str) -> dict[str, Any]:
 
 def llm_feedback_summary() -> dict[str, Any]:
     with get_connection() as connection:
-        rows = connection.execute(
+        feedback_rows = connection.execute(
             """
-            select feedback_type, count(*) as count
+            select feedback_type, comment, created_at
             from user_feedback
             where feedback_type in ('llm_helpful', 'llm_inaccurate', 'llm_vague')
-            group by feedback_type
+            order by created_at desc, id desc
             """
         ).fetchall()
-        counts = {feedback_type: 0 for feedback_type in sorted(LLM_FEEDBACK_TYPES)}
-        counts.update({row["feedback_type"]: int(row["count"] or 0) for row in rows})
+        enrichment_total = connection.execute("select count(*) as count from signal_enrichment").fetchone()
+        enrichment_unique = connection.execute("select count(distinct signal_id) as count from signal_enrichment").fetchone()
+        model_rows = connection.execute(
+            """
+            select provider, model, count(*) as count, max(created_at) as latest_at
+            from signal_enrichment
+            group by provider, model
+            order by count desc, latest_at desc
+            limit 8
+            """
+        ).fetchall()
+        priority_rows = connection.execute(
+            """
+            select coalesce(priority, 'unknown') as name, count(*) as count
+            from signal_enrichment
+            group by coalesce(priority, 'unknown')
+            order by count desc, name asc
+            """
+        ).fetchall()
+        category_rows = connection.execute(
+            """
+            select coalesce(ai_category, 'unknown') as name, count(*) as count
+            from signal_enrichment
+            group by coalesce(ai_category, 'unknown')
+            order by count desc, name asc
+            limit 8
+            """
+        ).fetchall()
+
+        counts = _empty_llm_feedback_counts()
+        feedback_by_model: dict[str, dict[str, Any]] = {}
+        feedback_by_date: dict[str, dict[str, Any]] = {}
+        last_feedback_at: Optional[str] = None
+
+        for row in feedback_rows:
+            feedback_type = row["feedback_type"]
+            counts[feedback_type] += 1
+            if last_feedback_at is None:
+                last_feedback_at = row["created_at"]
+
+            comment = _decode_feedback_comment(row["comment"])
+            model = str(comment.get("model") or "unknown")
+            if model not in feedback_by_model:
+                feedback_by_model[model] = {
+                    "model": model,
+                    "total": 0,
+                    "counts": _empty_llm_feedback_counts(),
+                    "helpful_rate": None,
+                }
+            feedback_by_model[model]["total"] += 1
+            feedback_by_model[model]["counts"][feedback_type] += 1
+
+            date_key = str(row["created_at"] or "")[:10] or "unknown"
+            if date_key not in feedback_by_date:
+                feedback_by_date[date_key] = {
+                    "date": date_key,
+                    "total": 0,
+                    "counts": _empty_llm_feedback_counts(),
+                    "helpful_rate": None,
+                }
+            feedback_by_date[date_key]["total"] += 1
+            feedback_by_date[date_key]["counts"][feedback_type] += 1
+
+        for item in feedback_by_model.values():
+            item["helpful_rate"] = _rate(item["counts"]["llm_helpful"], item["total"])
+        for item in feedback_by_date.values():
+            item["helpful_rate"] = _rate(item["counts"]["llm_helpful"], item["total"])
+
         total = sum(counts.values())
         helpful = counts["llm_helpful"]
+        negative = counts["llm_inaccurate"] + counts["llm_vague"]
         return {
             "total": total,
             "counts": counts,
-            "helpful_rate": round(helpful / total, 3) if total else None,
+            "helpful_rate": _rate(helpful, total),
+            "negative_rate": _rate(negative, total),
+            "enrichment": {
+                "total": int(enrichment_total["count"] or 0),
+                "unique_signals": int(enrichment_unique["count"] or 0),
+                "models": [dict(row) for row in model_rows],
+                "priorities": {row["name"]: int(row["count"] or 0) for row in priority_rows},
+                "categories": {row["name"]: int(row["count"] or 0) for row in category_rows},
+            },
+            "feedback": {
+                "by_model": sorted(feedback_by_model.values(), key=lambda item: (-item["total"], item["model"]))[:8],
+                "by_date": sorted(feedback_by_date.values(), key=lambda item: item["date"], reverse=True)[:14],
+                "last_feedback_at": last_feedback_at,
+            },
         }
 
 

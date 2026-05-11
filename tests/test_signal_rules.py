@@ -259,7 +259,31 @@ def test_llm_feedback_endpoint_records_summary(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "apps.api.app.main.llm_feedback_summary",
-        lambda: {"total": 1, "counts": {"llm_helpful": 1, "llm_inaccurate": 0, "llm_vague": 0}, "helpful_rate": 1.0},
+        lambda: {
+            "total": 1,
+            "counts": {"llm_helpful": 1, "llm_inaccurate": 0, "llm_vague": 0},
+            "helpful_rate": 1.0,
+            "negative_rate": 0.0,
+            "enrichment": {
+                "total": 4,
+                "unique_signals": 3,
+                "models": [{"provider": "openai-compatible", "model": "openai/gpt-oss-20b", "count": 4, "latest_at": "2026-05-09"}],
+                "priorities": {"must_read": 2},
+                "categories": {"coding-agent": 3},
+            },
+            "feedback": {
+                "by_model": [
+                    {
+                        "model": "openai/gpt-oss-20b",
+                        "total": 1,
+                        "counts": {"llm_helpful": 1, "llm_inaccurate": 0, "llm_vague": 0},
+                        "helpful_rate": 1.0,
+                    }
+                ],
+                "by_date": [],
+                "last_feedback_at": "2026-05-09",
+            },
+        },
     )
 
     response = TestClient(app).post("/tasks/3/llm-feedback", json={"feedback_type": "llm_helpful"})
@@ -267,6 +291,7 @@ def test_llm_feedback_endpoint_records_summary(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["feedback"]["feedback_type"] == "llm_helpful"
     assert response.json()["summary"]["helpful_rate"] == 1.0
+    assert response.json()["summary"]["enrichment"]["unique_signals"] == 3
 
 
 def test_llm_enrichment_uses_cache_boundary_and_structured_output(monkeypatch) -> None:

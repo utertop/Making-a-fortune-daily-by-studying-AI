@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 export type TaskStatus =
@@ -109,6 +110,34 @@ type LlmFeedbackSummary = {
   total: number;
   counts: Record<string, number>;
   helpful_rate: number | null;
+  negative_rate?: number | null;
+  enrichment?: {
+    total: number;
+    unique_signals: number;
+    models: Array<{
+      provider: string;
+      model: string;
+      count: number;
+      latest_at: string | null;
+    }>;
+    priorities: Record<string, number>;
+    categories: Record<string, number>;
+  };
+  feedback?: {
+    by_model: Array<{
+      model: string;
+      total: number;
+      helpful_rate: number | null;
+      counts: Record<string, number>;
+    }>;
+    by_date: Array<{
+      date: string;
+      total: number;
+      helpful_rate: number | null;
+      counts: Record<string, number>;
+    }>;
+    last_feedback_at: string | null;
+  };
 };
 
 type WorkspaceView = "today" | "todayArchive" | "historyArchive";
@@ -231,6 +260,18 @@ function formatDelta(value?: number) {
   }
 
   return value > 0 ? `+${value}` : `${value}`;
+}
+
+function formatPercent(value?: number | null) {
+  if (value === null || value === undefined) {
+    return "暂无数据";
+  }
+
+  return `${Math.round(value * 100)}%`;
+}
+
+function getFeedbackCount(summary: LlmFeedbackSummary | null, type: string) {
+  return summary?.counts?.[type] ?? 0;
 }
 
 function formatShanghaiDate(value: Date) {
@@ -592,6 +633,13 @@ export default function TodayWorkspace({
     llmFeedbackSummary?.helpful_rate === null || llmFeedbackSummary?.helpful_rate === undefined
       ? "暂无反馈"
       : `${Math.round(llmFeedbackSummary.helpful_rate * 100)}% 有帮助`;
+  const llmQualityModel = llmFeedbackSummary?.enrichment?.models?.[0] ?? null;
+  const llmQualityFeedbackTotal = llmFeedbackSummary?.total ?? 0;
+  const llmQualityNegativeTotal = getFeedbackCount(llmFeedbackSummary, "llm_inaccurate") + getFeedbackCount(llmFeedbackSummary, "llm_vague");
+  const llmQualityPriorityEntries = Object.entries(llmFeedbackSummary?.enrichment?.priorities ?? {}).slice(0, 4);
+  const llmQualityCategoryEntries = Object.entries(llmFeedbackSummary?.enrichment?.categories ?? {}).slice(0, 4);
+  const llmQualityModelFeedback = llmFeedbackSummary?.feedback?.by_model?.[0] ?? null;
+  const llmQualityLatestFeedback = formatArchiveTime(llmFeedbackSummary?.feedback?.last_feedback_at ?? null);
 
   const applyTaskUpdate = useCallback((updatedTask: TodayTask) => {
     setTasks((currentTasks) => currentTasks.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
@@ -1294,6 +1342,76 @@ export default function TodayWorkspace({
           <button disabled={isRefreshing} onClick={() => void refreshTodayCandidates()} type="button">
             {isRefreshing ? "刷新中..." : "刷新今日候选"}
           </button>
+        </div>
+      </section>
+
+      <section className="llm-quality-panel" aria-label="LLM 增强质量面板">
+        <div className="llm-quality-head">
+          <div>
+            <p className="panel-label">LLM QUALITY</p>
+            <h2>增强质量面板</h2>
+          </div>
+          <span>{llmQualityLatestFeedback ? `最近反馈 ${llmQualityLatestFeedback}` : "等待反馈积累"}</span>
+        </div>
+        <div className="llm-quality-grid">
+          <div className="llm-quality-metric is-primary">
+            <strong>{formatNumber(llmFeedbackSummary?.enrichment?.total ?? 0)}</strong>
+            <span>增强记录</span>
+            <small>{formatNumber(llmFeedbackSummary?.enrichment?.unique_signals ?? 0)} 个信号已增强</small>
+          </div>
+          <div className="llm-quality-metric">
+            <strong>{formatPercent(llmFeedbackSummary?.helpful_rate)}</strong>
+            <span>有帮助率</span>
+            <small>{llmQualityFeedbackTotal} 条反馈样本</small>
+          </div>
+          <div className="llm-quality-metric">
+            <strong>{formatPercent(llmFeedbackSummary?.negative_rate)}</strong>
+            <span>需改进率</span>
+            <small>{llmQualityNegativeTotal} 条不准确或太空泛</small>
+          </div>
+          <div className="llm-quality-metric">
+            <strong>{llmQualityModel?.model ?? "暂无模型"}</strong>
+            <span>主力模型</span>
+            <small>{llmQualityModel ? `${llmQualityModel.count} 次 · ${llmQualityModel.provider}` : "暂无增强记录"}</small>
+          </div>
+        </div>
+        <div className="llm-quality-breakdown">
+          <div>
+            <strong>反馈分布</strong>
+            <div className="llm-quality-bars">
+              <span style={{ "--bar": `${Math.max(6, getFeedbackCount(llmFeedbackSummary, "llm_helpful") * 18)}px` } as CSSProperties}>
+                有帮助 {getFeedbackCount(llmFeedbackSummary, "llm_helpful")}
+              </span>
+              <span style={{ "--bar": `${Math.max(6, getFeedbackCount(llmFeedbackSummary, "llm_inaccurate") * 18)}px` } as CSSProperties}>
+                不准确 {getFeedbackCount(llmFeedbackSummary, "llm_inaccurate")}
+              </span>
+              <span style={{ "--bar": `${Math.max(6, getFeedbackCount(llmFeedbackSummary, "llm_vague") * 18)}px` } as CSSProperties}>
+                太空泛 {getFeedbackCount(llmFeedbackSummary, "llm_vague")}
+              </span>
+            </div>
+          </div>
+          <div>
+            <strong>增强画像</strong>
+            <div className="llm-quality-tags">
+              {llmQualityPriorityEntries.length > 0 || llmQualityCategoryEntries.length > 0 ? (
+                [...llmQualityPriorityEntries, ...llmQualityCategoryEntries].map(([name, count]) => (
+                  <span key={name}>
+                    {name} {count}
+                  </span>
+                ))
+              ) : (
+                <span>暂无画像</span>
+              )}
+            </div>
+          </div>
+          <div>
+            <strong>模型反馈</strong>
+            <p>
+              {llmQualityModelFeedback
+                ? `${llmQualityModelFeedback.model} · ${llmQualityModelFeedback.total} 条 · ${formatPercent(llmQualityModelFeedback.helpful_rate)}`
+                : "暂无模型反馈样本"}
+            </p>
+          </div>
         </div>
       </section>
 

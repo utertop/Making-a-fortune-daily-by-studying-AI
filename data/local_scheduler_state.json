@@ -1,15 +1,23 @@
 {
   "last_run": {
-    "soft_deadline": "2026-05-08",
+    "soft_deadline": "2026-05-10",
     "login_catchup": "2026-04-25",
-    "hard_deadline": "2026-05-08",
-    "morning_push": "2026-05-09",
-    "afternoon_push": "2026-05-08"
+    "hard_deadline": "2026-05-10",
+    "morning_push": "2026-05-11",
+    "afternoon_push": "2026-05-10"
   },
   "carryover": {
-    "source_date": "2026-05-08",
+    "source_date": "2026-05-10",
     "task_ids": [
+      20,
+      16,
+      18,
+      17,
+      19,
+      15,
       12,
+      13,
+      14,
       11,
       6,
       8,
@@ -17,6 +25,6 @@
       9,
       5
     ],
-    "reminded_at": "2026-05-09T08:00:02.469819+08:00"
+    "reminded_at": "2026-05-11T08:00:02.276583+08:00"
   }
 }
