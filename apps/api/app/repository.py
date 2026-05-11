@@ -71,6 +71,7 @@ TASK_SELECT_SQL = """
         latest_enrichment.llm_score as llm_score,
         latest_enrichment.provider as llm_provider,
         latest_enrichment.model as llm_model,
+        latest_enrichment.prompt_version as llm_prompt_version,
         latest_enrichment.reason as llm_reason,
         latest_enrichment.risk as llm_risk,
         latest_enrichment.suggested_action as llm_suggested_action,
@@ -111,6 +112,35 @@ def _fetch_task_row(connection, task_id: int) -> dict[str, Any]:
     if row is None:
         raise ValueError(f"Task not found: {task_id}")
     return dict(row)
+
+
+def get_signal_for_task_enrichment(task_id: int) -> dict[str, Any]:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            select
+                s.id,
+                s.title,
+                s.url,
+                s.source_type,
+                s.summary,
+                s.published_at,
+                s.fetched_at,
+                s.signal_score,
+                s.status,
+                s.raw_content
+            from learning_task t
+            join signal s on s.id = t.signal_id
+            where t.id = ?
+            """,
+            (task_id,),
+        ).fetchone()
+        if row is None:
+            task = connection.execute("select id from learning_task where id = ?", (task_id,)).fetchone()
+            if task is None:
+                raise ValueError(f"Task not found: {task_id}")
+            raise ValueError(f"Task has no signal: {task_id}")
+        return dict(row)
 
 
 def _record_task_event(
@@ -325,6 +355,13 @@ def _rate(part: int, total: int) -> Optional[float]:
     return round(part / total, 3) if total else None
 
 
+def _coerce_int(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def record_llm_feedback(task_id: int, feedback_type: str) -> dict[str, Any]:
     if feedback_type not in LLM_FEEDBACK_TYPES:
         raise ValueError(f"Unsupported LLM feedback type: {feedback_type}")
@@ -340,6 +377,7 @@ def record_llm_feedback(task_id: int, feedback_type: str) -> dict[str, Any]:
             {
                 "task_id": task_id,
                 "model": task.get("llm_model"),
+                "prompt_version": task.get("llm_prompt_version"),
                 "priority": task.get("llm_priority"),
                 "ai_category": task.get("llm_ai_category"),
                 "project_type": task.get("llm_project_type"),
@@ -370,6 +408,111 @@ def record_llm_feedback(task_id: int, feedback_type: str) -> dict[str, Any]:
             payload={"feedback_id": int(cursor.lastrowid), "feedback_type": feedback_type},
         )
         return dict(feedback)
+
+
+def record_task_llm_rerun(task_id: int, enrichment: dict[str, Any]) -> dict[str, Any]:
+    with get_connection() as connection:
+        task = _fetch_task_row(connection, task_id)
+        _record_task_event(
+            connection,
+            task_id=task_id,
+            event_type="llm_rerun",
+            payload={
+                "previous_enrichment": {
+                    "model": task.get("llm_model"),
+                    "prompt_version": task.get("llm_prompt_version"),
+                    "priority": task.get("llm_priority"),
+                    "ai_category": task.get("llm_ai_category"),
+                    "project_type": task.get("llm_project_type"),
+                },
+                "new_enrichment": {
+                    "id": enrichment.get("id"),
+                    "signal_id": enrichment.get("signal_id"),
+                    "priority": enrichment.get("priority"),
+                    "ai_category": enrichment.get("ai_category"),
+                    "project_type": enrichment.get("project_type"),
+                    "llm_score": enrichment.get("llm_score"),
+                    "prompt_version": enrichment.get("prompt_version"),
+                },
+            },
+        )
+        return _fetch_task_row(connection, task_id)
+
+
+def _feedback_task_id(connection, feedback: dict[str, Any]) -> Optional[int]:
+    comment = _decode_feedback_comment(feedback.get("comment"))
+    task_id = _coerce_int(comment.get("task_id"))
+    if task_id is not None:
+        return task_id
+
+    signal_id = _coerce_int(feedback.get("signal_id"))
+    if signal_id is None:
+        return None
+    row = connection.execute(
+        """
+        select id
+        from learning_task
+        where signal_id = ? and task_type = 'knowledge_doc'
+        order by created_at desc, id desc
+        limit 1
+        """,
+        (signal_id,),
+    ).fetchone()
+    return int(row["id"]) if row else None
+
+
+def list_llm_rerun_candidates(limit: int = 10) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(limit, 50))
+    candidates: list[dict[str, Any]] = []
+    seen_task_ids: set[int] = set()
+    with get_connection() as connection:
+        feedback_rows = connection.execute(
+            """
+            select id, signal_id, feedback_type, comment, created_at
+            from user_feedback
+            where feedback_type in ('llm_inaccurate', 'llm_vague')
+            order by created_at desc, id desc
+            limit 200
+            """
+        ).fetchall()
+        for feedback_row in feedback_rows:
+            feedback = dict(feedback_row)
+            task_id = _feedback_task_id(connection, feedback)
+            if task_id is None or task_id in seen_task_ids:
+                continue
+
+            rerun_row = connection.execute(
+                """
+                select id
+                from task_event
+                where task_id = ? and event_type = 'llm_rerun' and created_at >= ?
+                limit 1
+                """,
+                (task_id, feedback["created_at"]),
+            ).fetchone()
+            if rerun_row:
+                continue
+
+            try:
+                task = _fetch_task_row(connection, task_id)
+            except ValueError:
+                continue
+            if task.get("signal_id") is None:
+                continue
+
+            seen_task_ids.add(task_id)
+            candidates.append(
+                {
+                    "task_id": task_id,
+                    "signal_id": task.get("signal_id"),
+                    "title": task.get("title"),
+                    "feedback_type": feedback["feedback_type"],
+                    "feedback_at": feedback["created_at"],
+                }
+            )
+            if len(candidates) >= safe_limit:
+                break
+    return candidates
 
 
 def llm_feedback_summary() -> dict[str, Any]:
@@ -407,6 +550,15 @@ def llm_feedback_summary() -> dict[str, Any]:
             from signal_enrichment
             group by coalesce(ai_category, 'unknown')
             order by count desc, name asc
+            limit 8
+            """
+        ).fetchall()
+        prompt_version_rows = connection.execute(
+            """
+            select coalesce(prompt_version, 'legacy-unknown') as name, count(*) as count, max(created_at) as latest_at
+            from signal_enrichment
+            group by coalesce(prompt_version, 'legacy-unknown')
+            order by latest_at desc, count desc
             limit 8
             """
         ).fetchall()
@@ -453,6 +605,7 @@ def llm_feedback_summary() -> dict[str, Any]:
         total = sum(counts.values())
         helpful = counts["llm_helpful"]
         negative = counts["llm_inaccurate"] + counts["llm_vague"]
+        rerun_candidates = list_llm_rerun_candidates(limit=50)
         return {
             "total": total,
             "counts": counts,
@@ -464,11 +617,16 @@ def llm_feedback_summary() -> dict[str, Any]:
                 "models": [dict(row) for row in model_rows],
                 "priorities": {row["name"]: int(row["count"] or 0) for row in priority_rows},
                 "categories": {row["name"]: int(row["count"] or 0) for row in category_rows},
+                "prompt_versions": [dict(row) for row in prompt_version_rows],
             },
             "feedback": {
                 "by_model": sorted(feedback_by_model.values(), key=lambda item: (-item["total"], item["model"]))[:8],
                 "by_date": sorted(feedback_by_date.values(), key=lambda item: item["date"], reverse=True)[:14],
                 "last_feedback_at": last_feedback_at,
+            },
+            "rerun": {
+                "pending_count": len(rerun_candidates),
+                "candidates": rerun_candidates[:8],
             },
         }
 
@@ -680,6 +838,7 @@ ENRICHMENT_SELECT_SQL = """
         provider,
         model,
         input_hash,
+        prompt_version,
         ai_category,
         project_type,
         relevance,
@@ -740,8 +899,9 @@ def upsert_signal_enrichment(enrichment: dict[str, Any]) -> int:
             """
             insert into signal_enrichment (
                 signal_id, provider, model, input_hash, ai_category, project_type,
-                relevance, priority, llm_score, reason, risk, suggested_action, raw_json
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                relevance, priority, llm_score, reason, risk, suggested_action,
+                prompt_version, raw_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(signal_id, input_hash) do update set
                 provider = excluded.provider,
                 model = excluded.model,
@@ -753,6 +913,7 @@ def upsert_signal_enrichment(enrichment: dict[str, Any]) -> int:
                 reason = excluded.reason,
                 risk = excluded.risk,
                 suggested_action = excluded.suggested_action,
+                prompt_version = excluded.prompt_version,
                 raw_json = excluded.raw_json,
                 created_at = CURRENT_TIMESTAMP
             """,
@@ -769,6 +930,7 @@ def upsert_signal_enrichment(enrichment: dict[str, Any]) -> int:
                 enrichment.get("reason"),
                 enrichment.get("risk"),
                 enrichment.get("suggested_action"),
+                enrichment.get("prompt_version", "legacy-unknown"),
                 enrichment.get("raw_json"),
             ),
         )

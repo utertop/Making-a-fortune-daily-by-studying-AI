@@ -5,7 +5,8 @@ from fastapi.testclient import TestClient
 from apps.api.app.collectors.rss import _score_entry
 from apps.api.app.document_quality import evaluate_markdown_quality
 from apps.api.app.llm.client import llm_status
-from apps.api.app.llm.enrichment import enrich_signal, push_enrichment_enabled, push_enrichment_limit
+from apps.api.app.llm.enrichment import enrich_signal, push_enrichment_enabled, push_enrichment_limit, signal_input_hash
+from apps.api.app.llm.prompts import SIGNAL_ENRICHMENT_PROMPT_VERSION, build_signal_enrichment_messages
 from apps.api.app.llm.schemas import validate_signal_enrichment
 from apps.api.app.main import app
 from apps.api.app.push.feishu import build_today_task_text
@@ -211,6 +212,12 @@ def test_llm_enrichment_validation_clamps_to_fixed_taxonomy() -> None:
     assert enriched["reason"] == "Useful for agent workflow observation."
 
 
+def test_signal_enrichment_prompt_version_is_recorded_in_prompt() -> None:
+    messages = build_signal_enrichment_messages({"title": "example/agent-lab"})
+
+    assert SIGNAL_ENRICHMENT_PROMPT_VERSION in messages[1]["content"]
+
+
 def test_llm_status_is_sanitized(monkeypatch) -> None:
     monkeypatch.setenv("AI_SIGNAL_RADAR_LLM_ENABLED", "true")
     monkeypatch.setenv("OPENAI_API_KEY", "secret-key-value")
@@ -294,6 +301,101 @@ def test_llm_feedback_endpoint_records_summary(monkeypatch) -> None:
     assert response.json()["summary"]["enrichment"]["unique_signals"] == 3
 
 
+def test_task_llm_rerun_endpoint_returns_refreshed_task(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "apps.api.app.main.rerun_task_signal_enrichment",
+        lambda task_id: {
+            "enabled": True,
+            "task": {"id": task_id, "title": "example/agent-lab", "llm_reason": "Sharper rerun."},
+            "enrichment": {"id": 42, "cached": False},
+        },
+    )
+    monkeypatch.setattr(
+        "apps.api.app.main.llm_feedback_summary",
+        lambda: {"total": 0, "counts": {"llm_helpful": 0, "llm_inaccurate": 0, "llm_vague": 0}, "helpful_rate": None},
+    )
+
+    response = TestClient(app).post("/tasks/3/llm-rerun")
+
+    assert response.status_code == 200
+    assert response.json()["task"]["llm_reason"] == "Sharper rerun."
+    assert response.json()["enrichment"]["cached"] is False
+
+
+def test_low_quality_llm_batch_rerun_endpoint_returns_tasks(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "apps.api.app.main.rerun_low_quality_signal_enrichments",
+        lambda limit: {
+            "enabled": True,
+            "processed": limit,
+            "rerun": 2,
+            "errors": [],
+            "tasks": [{"id": 3, "title": "example/agent-lab", "llm_reason": "Batch rerun."}],
+        },
+    )
+    monkeypatch.setattr(
+        "apps.api.app.main.llm_feedback_summary",
+        lambda: {
+            "total": 2,
+            "counts": {"llm_helpful": 0, "llm_inaccurate": 1, "llm_vague": 1},
+            "helpful_rate": 0.0,
+            "rerun": {"pending_count": 0, "candidates": []},
+        },
+    )
+
+    response = TestClient(app).post("/llm/rerun-low-quality", json={"limit": 2})
+
+    assert response.status_code == 200
+    assert response.json()["rerun"] == 2
+    assert response.json()["tasks"][0]["llm_reason"] == "Batch rerun."
+    assert response.json()["summary"]["rerun"]["pending_count"] == 0
+
+
+def test_llm_enrichment_force_refresh_bypasses_cache(monkeypatch) -> None:
+    stored: dict[str, object] = {}
+    calls = {"find": 0}
+
+    def fake_find(*_args):
+        calls["find"] += 1
+        return {"id": 1, "cached": True}
+
+    monkeypatch.setattr("apps.api.app.llm.enrichment.find_signal_enrichment_by_hash", fake_find)
+    monkeypatch.setattr(
+        "apps.api.app.llm.enrichment.upsert_signal_enrichment",
+        lambda value: stored.setdefault("value", value) and 99,
+    )
+    signal = {
+        "id": 7,
+        "title": "example/agent-lab",
+        "url": "https://github.com/example/agent-lab",
+        "source_type": "github_repo",
+        "summary": "AI agent workflow framework",
+        "signal_score": 72,
+        "raw_content": '{"stars_delta_7d":1200,"language":"Python"}',
+    }
+
+    result = enrich_signal(
+        signal,
+        completion_fn=lambda _messages: {
+            "ai_category": "coding-agent",
+            "project_type": "framework",
+            "relevance": "high",
+            "priority": "must_read",
+            "llm_score": 90,
+            "reason": "Sharper rerun.",
+            "risk": "Check sources.",
+            "suggested_action": "Deep dive again.",
+        },
+        model="test-model",
+        force_refresh=True,
+    )
+
+    assert calls["find"] == 0
+    assert result["id"] == 99
+    assert stored["value"]["input_hash"] != signal_input_hash(signal)
+    assert stored["value"]["prompt_version"] == SIGNAL_ENRICHMENT_PROMPT_VERSION
+
+
 def test_llm_enrichment_uses_cache_boundary_and_structured_output(monkeypatch) -> None:
     stored: dict[str, object] = {}
 
@@ -330,6 +432,7 @@ def test_llm_enrichment_uses_cache_boundary_and_structured_output(monkeypatch) -
     assert result["priority"] == "must_read"
     assert stored["value"]["signal_id"] == 7
     assert stored["value"]["input_hash"]
+    assert stored["value"]["prompt_version"] == SIGNAL_ENRICHMENT_PROMPT_VERSION
 
 
 def test_feishu_digest_prefers_llm_reason_when_available() -> None:

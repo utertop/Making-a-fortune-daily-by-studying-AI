@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from .db import database_status, ensure_database
 from .llm.client import llm_status
-from .llm.enrichment import enrich_top_signal_candidates
+from .llm.enrichment import enrich_top_signal_candidates, rerun_low_quality_signal_enrichments, rerun_task_signal_enrichment
 from .markdown_drafts import build_project_markdown, default_project_doc_path, write_markdown_draft
 from .repository import (
     TASK_STATUSES,
@@ -65,6 +65,10 @@ class SignalEnrichRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=50)
 
 
+class LlmBatchRerunRequest(BaseModel):
+    limit: int = Field(default=5, ge=1, le=20)
+
+
 class LlmFeedbackSubmit(BaseModel):
     feedback_type: str = Field(max_length=40)
 
@@ -118,6 +122,13 @@ def enrich_signals(payload: SignalEnrichRequest) -> dict:
 def get_llm_feedback_summary() -> dict:
     ensure_database()
     return llm_feedback_summary()
+
+
+@app.post("/llm/rerun-low-quality")
+def rerun_low_quality_llm_enrichments(payload: LlmBatchRerunRequest) -> dict:
+    ensure_database()
+    result = rerun_low_quality_signal_enrichments(limit=payload.limit)
+    return {**result, "summary": llm_feedback_summary()}
 
 
 @app.get("/tasks/today")
@@ -199,6 +210,18 @@ def submit_task_llm_feedback(task_id: int, payload: LlmFeedbackSubmit) -> dict:
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return {"feedback": feedback, "summary": llm_feedback_summary()}
+
+
+@app.post("/tasks/{task_id}/llm-rerun")
+def rerun_task_llm_enrichment(task_id: int) -> dict:
+    ensure_database()
+    try:
+        result = rerun_task_signal_enrichment(task_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {**result, "summary": llm_feedback_summary()}
 
 
 @app.post("/tasks/{task_id}/document")

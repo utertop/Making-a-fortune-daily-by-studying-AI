@@ -52,6 +52,7 @@ export type TodayTask = {
   llm_score: number | null;
   llm_provider: string | null;
   llm_model: string | null;
+  llm_prompt_version: string | null;
   llm_reason: string | null;
   llm_risk: string | null;
   llm_suggested_action: string | null;
@@ -106,6 +107,15 @@ type LlmEnrichPayload = {
   errors: Array<{ signal_id?: number; error: string }>;
 };
 
+type LlmBatchRerunPayload = {
+  enabled: boolean;
+  processed: number;
+  rerun: number;
+  errors: Array<{ task_id?: number; error: string }>;
+  tasks: TodayTask[];
+  summary: LlmFeedbackSummary;
+};
+
 type LlmFeedbackSummary = {
   total: number;
   counts: Record<string, number>;
@@ -122,6 +132,11 @@ type LlmFeedbackSummary = {
     }>;
     priorities: Record<string, number>;
     categories: Record<string, number>;
+    prompt_versions: Array<{
+      name: string;
+      count: number;
+      latest_at: string | null;
+    }>;
   };
   feedback?: {
     by_model: Array<{
@@ -137,6 +152,16 @@ type LlmFeedbackSummary = {
       counts: Record<string, number>;
     }>;
     last_feedback_at: string | null;
+  };
+  rerun?: {
+    pending_count: number;
+    candidates: Array<{
+      task_id: number;
+      signal_id: number | null;
+      title: string | null;
+      feedback_type: string;
+      feedback_at: string;
+    }>;
   };
 };
 
@@ -568,6 +593,8 @@ export default function TodayWorkspace({
   const [isEnriching, setIsEnriching] = useState(false);
   const [llmFeedbackSummary, setLlmFeedbackSummary] = useState<LlmFeedbackSummary | null>(null);
   const [feedbackBusyTaskId, setFeedbackBusyTaskId] = useState<number | null>(null);
+  const [rerunBusyTaskId, setRerunBusyTaskId] = useState<number | null>(null);
+  const [isBatchRerunning, setIsBatchRerunning] = useState(false);
 
   const liveSummary = useMemo(() => buildSummary(tasks), [tasks]);
   const summary = initialSummary && tasks.length === initialTasks.length ? liveSummary : liveSummary;
@@ -638,8 +665,11 @@ export default function TodayWorkspace({
   const llmQualityNegativeTotal = getFeedbackCount(llmFeedbackSummary, "llm_inaccurate") + getFeedbackCount(llmFeedbackSummary, "llm_vague");
   const llmQualityPriorityEntries = Object.entries(llmFeedbackSummary?.enrichment?.priorities ?? {}).slice(0, 4);
   const llmQualityCategoryEntries = Object.entries(llmFeedbackSummary?.enrichment?.categories ?? {}).slice(0, 4);
+  const llmQualityPromptVersion = llmFeedbackSummary?.enrichment?.prompt_versions?.[0] ?? null;
   const llmQualityModelFeedback = llmFeedbackSummary?.feedback?.by_model?.[0] ?? null;
   const llmQualityLatestFeedback = formatArchiveTime(llmFeedbackSummary?.feedback?.last_feedback_at ?? null);
+  const llmRerunPendingCount = llmFeedbackSummary?.rerun?.pending_count ?? 0;
+  const canBatchRerunLlm = Boolean(llmStatus?.enabled) && !isBatchRerunning && !isHistoryArchive && llmRerunPendingCount > 0;
 
   const applyTaskUpdate = useCallback((updatedTask: TodayTask) => {
     setTasks((currentTasks) => currentTasks.map((task) => (task.id === updatedTask.id ? updatedTask : task)));
@@ -868,6 +898,77 @@ export default function TodayWorkspace({
     },
     [runtimeApiBaseUrl],
   );
+
+  const rerunLlmEnrichmentForTask = useCallback(
+    async (task: TodayTask) => {
+      if (!llmStatus?.enabled) {
+        setError("LLM 增强尚未启用，请先检查 API key、模型和开关配置。");
+        return;
+      }
+
+      setRerunBusyTaskId(task.id);
+      setError("");
+      try {
+        const response = await fetch(`${runtimeApiBaseUrl}/tasks/${task.id}/llm-rerun`, {
+          cache: "no-store",
+          method: "POST",
+        });
+        if (!response.ok) {
+          throw new Error(await parseApiError(response));
+        }
+
+        const payload = (await response.json()) as { task: TodayTask; summary: LlmFeedbackSummary };
+        applyTaskUpdate(payload.task);
+        setLlmFeedbackSummary(payload.summary);
+        setNotice(`已重新增强：${task.title}。`);
+      } catch (rerunError) {
+        setError(rerunError instanceof Error ? rerunError.message : "重新增强失败。");
+      } finally {
+        setRerunBusyTaskId(null);
+      }
+    },
+    [applyTaskUpdate, llmStatus?.enabled, runtimeApiBaseUrl],
+  );
+
+  const rerunLowQualityLlmBatch = useCallback(async () => {
+    if (!llmStatus?.enabled) {
+      setError("LLM 增强尚未启用，请先检查 API key、模型和开关配置。");
+      return;
+    }
+    if (isHistoryArchive) {
+      setError("历史归档默认只读，请回到今日候选或今日归档后再批量重跑。");
+      return;
+    }
+
+    setIsBatchRerunning(true);
+    setError("");
+    try {
+      const response = await fetch(`${runtimeApiBaseUrl}/llm/rerun-low-quality`, {
+        cache: "no-store",
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 5 }),
+      });
+      if (!response.ok) {
+        throw new Error(await parseApiError(response));
+      }
+
+      const payload = (await response.json()) as LlmBatchRerunPayload;
+      if (!payload.enabled) {
+        throw new Error("LLM 增强尚未启用，请先检查 API key、模型和开关配置。");
+      }
+      if (payload.tasks.length > 0) {
+        setTasks((currentTasks) => currentTasks.map((task) => payload.tasks.find((item) => item.id === task.id) ?? task));
+      }
+      setLlmFeedbackSummary(payload.summary);
+      const errorSuffix = payload.errors.length > 0 ? `，${payload.errors.length} 个失败` : "";
+      setNotice(`已批量重跑 ${payload.rerun} 个低质量增强结果${errorSuffix}。`);
+    } catch (rerunError) {
+      setError(rerunError instanceof Error ? rerunError.message : "批量重跑失败。");
+    } finally {
+      setIsBatchRerunning(false);
+    }
+  }, [isHistoryArchive, llmStatus?.enabled, runtimeApiBaseUrl]);
 
   const runBulkDetection = useCallback(
     async (silent = false) => {
@@ -1351,7 +1452,12 @@ export default function TodayWorkspace({
             <p className="panel-label">LLM QUALITY</p>
             <h2>增强质量面板</h2>
           </div>
-          <span>{llmQualityLatestFeedback ? `最近反馈 ${llmQualityLatestFeedback}` : "等待反馈积累"}</span>
+          <div className="llm-quality-head-actions">
+            <span>{llmQualityLatestFeedback ? `最近反馈 ${llmQualityLatestFeedback}` : "等待反馈积累"}</span>
+            <button disabled={!canBatchRerunLlm} onClick={() => void rerunLowQualityLlmBatch()} type="button">
+              {isBatchRerunning ? "批量重跑中..." : "批量重跑低质量"}
+            </button>
+          </div>
         </div>
         <div className="llm-quality-grid">
           <div className="llm-quality-metric is-primary">
@@ -1368,6 +1474,16 @@ export default function TodayWorkspace({
             <strong>{formatPercent(llmFeedbackSummary?.negative_rate)}</strong>
             <span>需改进率</span>
             <small>{llmQualityNegativeTotal} 条不准确或太空泛</small>
+          </div>
+          <div className="llm-quality-metric">
+            <strong>{formatNumber(llmRerunPendingCount)}</strong>
+            <span>待重跑</span>
+            <small>{isHistoryArchive ? "历史归档只读" : "最近低质量反馈"}</small>
+          </div>
+          <div className="llm-quality-metric">
+            <strong>{llmQualityPromptVersion?.name ?? "暂无版本"}</strong>
+            <span>Prompt 版本</span>
+            <small>{llmQualityPromptVersion ? `${llmQualityPromptVersion.count} 次增强` : "等待增强记录"}</small>
           </div>
           <div className="llm-quality-metric">
             <strong>{llmQualityModel?.model ?? "暂无模型"}</strong>
@@ -1607,7 +1723,9 @@ export default function TodayWorkspace({
                         <div className="llm-insight-header">
                           <strong>LLM 增强判断</strong>
                           <span>
-                            {[task.llm_priority, task.llm_ai_category, task.llm_project_type].filter(Boolean).join(" / ") || "已分析"}
+                            {[task.llm_priority, task.llm_ai_category, task.llm_project_type, task.llm_prompt_version]
+                              .filter(Boolean)
+                              .join(" / ") || "已分析"}
                           </span>
                         </div>
                         {task.llm_reason ? <p>{task.llm_reason}</p> : null}
@@ -1635,6 +1753,16 @@ export default function TodayWorkspace({
                           >
                             太空泛
                           </button>
+                          {!isHistoryArchive ? (
+                            <button
+                              className="llm-rerun-button"
+                              disabled={feedbackBusyTaskId === task.id || rerunBusyTaskId === task.id}
+                              onClick={() => void rerunLlmEnrichmentForTask(task)}
+                              type="button"
+                            >
+                              {rerunBusyTaskId === task.id ? "重跑中..." : "重新增强"}
+                            </button>
+                          ) : null}
                         </div>
                       </div>
                     ) : null}

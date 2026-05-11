@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS signal_enrichment (
     reason TEXT,
     risk TEXT,
     suggested_action TEXT,
+    prompt_version TEXT NOT NULL DEFAULT 'legacy-unknown',
     raw_json TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(signal_id) REFERENCES signal(id),

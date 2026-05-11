@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+SIGNAL_ENRICHMENT_PROMPT_VERSION = "signal-enrichment-v1"
+
 SYSTEM_PROMPT = """You are an AI technology signal analyst.
 Return only valid JSON. Do not invent facts beyond the provided fields.
 Classify the signal, judge whether it is worth deep research, and write one short reason."""
@@ -19,6 +21,7 @@ def build_signal_enrichment_messages(signal: dict[str, Any]) -> list[dict[str, s
         "raw_content": signal.get("raw_content"),
     }
     user_prompt = {
+        "prompt_version": SIGNAL_ENRICHMENT_PROMPT_VERSION,
         "task": "Analyze this AI signal for a daily AI learning radar.",
         "allowed_values": {
             "ai_category": [

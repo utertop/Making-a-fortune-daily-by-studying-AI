@@ -42,6 +42,10 @@ ARCHIVE_DAY_COLUMNS = {
     "latest_push_at": "ALTER TABLE archive_day ADD COLUMN latest_push_at TEXT",
 }
 
+SIGNAL_ENRICHMENT_COLUMNS = {
+    "prompt_version": "ALTER TABLE signal_enrichment ADD COLUMN prompt_version TEXT NOT NULL DEFAULT 'legacy-unknown'",
+}
+
 DEEP_DOSSIER_SUFFIX = "深度项目知识档案"
 LEGACY_NOTE_SUFFIX = "技术笔记"
 
@@ -121,6 +125,7 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
             reason TEXT,
             risk TEXT,
             suggested_action TEXT,
+            prompt_version TEXT NOT NULL DEFAULT 'legacy-unknown',
             raw_json TEXT,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(signal_id) REFERENCES signal(id),
@@ -128,6 +133,14 @@ def _apply_migrations(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    signal_enrichment_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(signal_enrichment)").fetchall()
+    }
+    for column, statement in SIGNAL_ENRICHMENT_COLUMNS.items():
+        if column not in signal_enrichment_columns:
+            connection.execute(statement)
+
     connection.execute(
         "CREATE INDEX IF NOT EXISTS idx_signal_enrichment_signal_time ON signal_enrichment(signal_id, created_at DESC)"
     )
